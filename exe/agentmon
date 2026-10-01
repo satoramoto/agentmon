@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# agentmon                  the dashboard (one plain frame when piped: `agentmon | cat`)
+# agentmon top --once       processes of agent sessions, plain table
+# agentmon --help           every command
+require_relative "../lib/agentmon"
+
+Agentmon::Program.start(ARGV)

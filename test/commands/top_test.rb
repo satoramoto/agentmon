@@ -1,0 +1,79 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class TopCommandTest < Minitest::Test
+  include Fixtures
+  include R2UI::CLI::Testing
+
+  def top(*argv)
+    with_engine(Fixtures.engine(machine(0), machine(2))) { run_cli(Agentmon::Program.build, "top", *argv) }
+  end
+
+  def test_once_prints_agent_processes_busiest_first_as_plain_columns
+    result = top("--once")
+    lines = result.out.lines.map(&:rstrip)
+
+    assert result.success?, result.err
+    assert_match(/\APID\s+Name\s+Session\s+CPU\s+Footprint\s+Resident\s+Read\s+Write\z/, lines.first.strip)
+    assert_match(/\A200\s+claude\s+claude 200 · repo\s+100\.0%\s+512M\s+600M\s+0B\/s\s+1000B\/s\z/, lines[1].strip)
+    assert_equal %w[200 201 202], lines[1..3].map { |l| l.split.first } # ties at 0% by pid
+    refute_includes result.out, "Finder"
+    refute_includes result.out, "\e[" # plain in a pipe
+  end
+
+  def test_all_includes_every_process_and_unknowns_are_blank
+    result = top("--once", "--all", "--limit", "20")
+
+    assert_includes result.out, "Finder"
+    assert_match(/^\s*500\s+WindowServer\s+11\.2%\s+134M\s*$/, result.out)
+  end
+
+  def test_sort_and_limit
+    result = top("--once", "--sort", "footprint", "-n", "2")
+
+    assert_equal %w[200 300], result.out.lines.drop(1).map { |l| l.split.first }
+  end
+
+  def test_unknown_sort_is_a_usage_error
+    assert_equal 2, top("--sort", "nope").code
+  end
+
+  def test_off_a_terminal_top_prints_once_without_the_flag
+    assert_includes top.out, "claude 200 · repo"
+  end
+
+  # An engine whose sampler dies after the first frame.
+  class DyingEngine
+    def initialize(reading)
+      @reading = reading
+      @calls = 0
+    end
+
+    def current = (@calls += 1) > 1 ? raise("sampler died") : @reading
+
+    def errors = {}
+  end
+
+  def test_live_top_fails_instead_of_freezing_when_the_view_dies
+    reading = Fixtures.engine(machine(0), machine(2)).current
+    result = with_engine(DyingEngine.new(reading)) { run_cli(Agentmon::Program.build, "top", tty: true, width: 120) }
+
+    assert_equal 1, result.code
+    assert_includes result.err, "sampler died"
+    assert_includes result.out, "claude 200 · repo" # the first frame was drawn
+    assert result.out.end_with?(R2UI::CLI::Live::SHOW_CURSOR), "cursor shown again"
+  end
+
+  def test_broken_metrics_are_reported_on_stderr_not_stdout
+    registry = Agentmon::Registry.new
+    Agentmon.registry.metrics.each { |m| registry.add(:metric, m) }
+    registry.add(:metric, Agentmon::Metric.new(name: :broken, block: ->(_r, _s) { raise "no swap info" }))
+    engine = Agentmon::Engine.new(sampler: Sampler.new(machine(0), machine(2)), registry:, prime_gap: 0)
+    result = with_engine(engine) { run_cli(Agentmon::Program.build, "top", "--once") }
+
+    assert result.success?
+    assert_includes result.err, "metric broken: RuntimeError: no swap info"
+    refute_includes result.out, "no swap info"
+  end
+end
