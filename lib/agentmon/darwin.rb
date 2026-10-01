@@ -15,8 +15,10 @@ module Agentmon
   # the readers here return nil. Callers fall back to what ps reports.
   module Darwin
     RUSAGE_INFO_V4 = 4
-    # struct rusage_info_v4: a 16-byte uuid, then 56 uint64 fields (44 named, 12 reserved).
-    RUSAGE_SIZE = 16 + (8 * 56)
+    # struct rusage_info_v4: a 16-byte uuid, then 35 uint64 fields (ri_user_time ..
+    # ri_runnable_time) = 296 bytes. v5 and v6 append fields; v4 is what we ask for.
+    RUSAGE_FIELDS = 35
+    RUSAGE_SIZE = 16 + (8 * RUSAGE_FIELDS)
     PROC_PIDTBSDINFO = 3
     # struct proc_bsdinfo is 136 bytes; pbi_start_tvsec/usec are its last two uint64 fields.
     BSDINFO_SIZE = 136
@@ -54,10 +56,14 @@ module Agentmon
         return fail_with(Fiddle.last_error) unless functions[:rusage].call(pid, RUSAGE_INFO_V4, buffer).zero?
 
         Thread.current[:agentmon_errno] = 0
-        decode_rusage(buffer[16, RUSAGE_SIZE - 16].unpack("Q*"))
+        decode_rusage_bytes(buffer[0, RUSAGE_SIZE])
       end
 
-      # Decodes the uint64 fields of a rusage_info_v4 (after the uuid). Public for tests.
+      # Decodes a whole rusage_info_v4 as the kernel wrote it (uuid included, native-endian
+      # uint64s; every Mac agentmon runs on is little-endian). Public for tests.
+      def decode_rusage_bytes(bytes) = decode_rusage(bytes.byteslice(16, RUSAGE_SIZE - 16).unpack("Q<*"))
+
+      # Decodes the uint64 fields of a rusage_info_v4 (after the uuid), by FIELDS index.
       def decode_rusage(values)
         f = ->(name) { values.fetch(FIELDS.fetch(name)) }
         Rusage.new(

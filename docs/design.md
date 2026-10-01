@@ -32,7 +32,13 @@ can be built at once and merged in any order.
 - **Metric** (`Agentmon.metric`): derives a value from the sample, the previous sample and its own
   state Hash (kept between samples, so a metric can accumulate). Metrics ask for each other by
   name (`reading[:sessions]`); each is computed once per sample, and every metric runs on every
-  sample, so stateful ones never miss one.
+  sample, so stateful ones never miss one. Stories land in any order, so `reading[:name]` is nil
+  for a metric nobody registers yet, and a metric that raises is nil for that sample with its error
+  in `reading.errors`; nothing else stops. Every consumer handles nil ("not available").
+- **Errors** (`Engine#errors`, `Agentmon.engine_errors`): the latest probe, metric and recorder
+  errors, as `{ "metric memory" => "NoMethodError: ..." }`. The dashboard shows the first on the
+  left of its status bar ("⚠ metric memory: ..."); every command prints them on stderr after it
+  runs.
 - **Reading**: the sample plus every metric's value. Built by the Engine, then read-only, so the
   dashboard's feed threads share it safely.
 - **Engine** (`Agentmon.engine`): sampler → reading → recorders, behind a lock. `current(max_age:)`
@@ -40,7 +46,9 @@ can be built at once and merged in any order.
   2 s interval), so every panel's feed and every command share one sample. The first call takes
   two samples 0.5 s apart, so rates exist in the very first frame and in `top --once`.
 - **Recorder** (`Agentmon.recorder`): turns a reading into store records, at most every `every`
-  seconds, only while the engine is recording (the interactive dashboard, `agentmon record`).
+  seconds, only while the engine is recording (the interactive dashboard, `agentmon record`). It
+  gets a state Hash kept for the engine's life (`{ |reading, state| }`), e.g. the ids it already
+  wrote a final line for; never use module-level state.
 - **Store**: append-only JSON lines, one file per kind per local day:
   `$AGENTMON_STATE_DIR` | `$XDG_STATE_HOME/agentmon` | `~/.local/state/agentmon`, then
   `<kind>/YYYY-MM-DD.jsonl`. `append(kind, hash)`, `each(kind, since:, till:)`, `prune(days:)`.
@@ -129,13 +137,19 @@ Readers merge `sessions` lines by `id`, taking each total's maximum (`cpu_second
 `bytes_read`, `bytes_written`, `peak_footprint`): every run of agentmon recounts from the kernel's
 counters, so maxima never double count; sums would.
 
+A session whose merged lines have no `ended_at` is **running** only while it was seen recently:
+its `last_seen_at` is within 60 s (6 recorder intervals) of now. Otherwise agentmon wasn't
+running when it ended (or crashed), so readers treat it as ended at its `last_seen_at`, shown as
+"ended (not seen after HH:MM)", and its duration stops there. A session is never shown running
+forever.
+
 ## Extension points
 
 ```ruby
 module Agentmon
   probe(:name, every: nil) { |state| value }                     # sample[:name]
   metric(:name) { |reading, state| value }                       # reading[:name]
-  recorder(:name, every: 10) { |reading| hash_or_hashes }        # store kind :name
+  recorder(:name, every: 10) { |reading, state| hash_or_hashes } # store kind :name
   resource(:name) { |engine| source { engine.current[:x] }; ... } # r2ui resource DSL, once
   extend_resource(:name) { |engine| column ...; action ... }     # more DSL for it
   dashboard { |engine| on_key "x" do ... end }                   # r2ui dashboard DSL
@@ -162,8 +176,8 @@ Mach tick conversion and EPERM fallback) with `test/probes/processes_test.rb` an
 - Build against the shapes in `model.rb`, not against another story's code: stories are built at
   the same time. A story that consumes a metric another story produces tests with preset values:
   `Reading.new(sample, values: { memory: MemoryView.new(...) })`, or an engine over fixture
-  samples (`Fixtures.engine`). Until the producer merges, the live dashboard shows r2ui's error
-  line ("no metric memory") in that panel; that's expected.
+  samples (`Fixtures.engine`). Until the producer merges, `reading[:memory]` is nil: handle nil
+  (an empty panel, a blank cell, a skipped record, `|| []` in a source) and test that case too.
 - Name private modules after your story and never after a model shape or a core module: inside
   `module Agentmon::Metrics::ProcessRates`, `ProcessRates.new` would mean the module, not the
   model (this bit the first articles; that module is `Metrics::Rates`). `grep -rn "module <Name>\|class <Name>\|<Name> = Data" lib/` first.
@@ -174,6 +188,12 @@ Mach tick conversion and EPERM fallback) with `test/probes/processes_test.rb` an
   against `Agentmon::Program.build`. Live macOS checks go in `test/live/<file>_test.rb`, start with
   `macos!`, stay few and fast, and never assume root.
 - Test file per story: `test/<dir>/<file>_test.rb` for `lib/agentmon/<dir>/<file>.rb`.
+- Test class names are `<Story><Kind>Test`, Kind one of `Probe`, `Metric`, `Recorder`, `Panel`
+  (anything in `ui/`), `Command`, `Live`, `Core`: `MemoryProbeTest`, `MemoryMetricTest`,
+  `MemoryPanelTest`, `MemoryCommandTest`, `MemoryLiveTest`. `test/probes/memory_test.rb` and
+  `test/metrics/memory_test.rb` both exist; with one class name, the second file would reopen the
+  first's class and silently replace same-named test methods. Helper classes inside a test go
+  inside its test class.
 - Sampling must stay under ~100 ms a tick: no subprocess per process (Fiddle, or one subprocess for
   the whole machine), anything slower behind `every:`.
 - Numbers: units as above; rates only between samples with the same process identity; totals over
@@ -212,10 +232,10 @@ Done here (first articles): **d00** = the core, probes `processes` and `cwd`, me
 
 | Id | Capability | Reserves | Acceptance criteria | New files |
 |---|---|---|---|---|
-| a11-session-recorder | Session history | recorder `sessions` | Every 10 s, one `sessions` store line per alive session (`Session#to_record`), plus exactly one final line for each session the first time it is seen ended (recorder keeps the ended ids it wrote). Engine test with a temp store and fixture samples: lines, fields and units round-trip; an ended session's final line has `ended_at`. | `lib/agentmon/recorders/sessions.rb`, `test/recorders/sessions_test.rb` |
+| a11-session-recorder | Session history | recorder `sessions` | Every 10 s, one `sessions` store line per alive session (`Session#to_record`), plus exactly one final line for each session the first time it is seen ended (the ended ids it wrote live in the recorder's state Hash, so two engines don't share them). Engine test with a temp store and fixture samples: lines, fields and units round-trip; an ended session's final line has `ended_at`. | `lib/agentmon/recorders/sessions.rb`, `test/recorders/sessions_test.rb` |
 | a12-memory-recorder | Memory history | recorder `memory` | Every 10 s, one `memory` line (`MemoryView#to_h` without `pressure_trend`); nothing while `reading[:memory]` is nil. Engine test with preset values and a temp store. | `lib/agentmon/recorders/memory.rb`, `test/recorders/memory_test.rb` |
 | a13-sessions-command | `agentmon sessions` | command `sessions` | Lists live sessions now (engine ledger): label, processes, CPU %, footprint, peak, CPU s, written, age, as an r2ui `table` (boxed on a terminal, plain aligned columns in a pipe); `--all` adds ended ones; `--json` prints one JSON object per line with raw units (bytes, seconds) for scripts; "No agent sessions running." when empty (exit 0). run_cli tests over fixture engines. | `lib/agentmon/commands/sessions.rb`, `test/commands/sessions_test.rb` |
-| a14-report-command | `agentmon report [--since 2h]` | command `report` | Reads `sessions` lines from the store since `--since` (`90m`, `2h`, `3d`; default 24h; a bad value is a usage error), merges them by id (maxima, see "Store records"), and prints an npm-quality summary: a heading with the period, one table row per session (label, started, duration, peak footprint, CPU seconds, written, ended/running), then totals ("4 sessions · 3h 12m CPU · 2.1G written") with r2ui CLI helpers (`heading`, `table`, `duration`, `plural`); `--json` prints merged records; an empty period says so. run_cli tests over a temp store written with fixture lines. | `lib/agentmon/commands/report.rb`, `test/commands/report_test.rb` |
+| a14-report-command | `agentmon report [--since 2h]` | command `report` | Reads `sessions` lines from the store since `--since` (`90m`, `2h`, `3d`; default 24h; a bad value is a usage error), merges them by id (maxima, see "Store records"), and prints an npm-quality summary: a heading with the period, one table row per session (label, started, duration, peak footprint, CPU seconds, written, ended/running), where a session without `ended_at` whose last line is older than 60 s is shown ended at its last seen time ("ended (not seen after 14:02)"), never running (see "Store records"; a test covers a store whose writer stopped mid-session), then totals ("4 sessions · 3h 12m CPU · 2.1G written") with r2ui CLI helpers (`heading`, `table`, `duration`, `plural`); `--json` prints merged records; an empty period says so. run_cli tests over a temp store written with fixture lines. | `lib/agentmon/commands/report.rb`, `test/commands/report_test.rb` |
 | a15-record-command | `agentmon record` | command `record` | Runs the engine headless with recording on (`--interval`, default 2 s) until ctrl+c or TERM, printing one status line per minute ("recording 3 sessions to …") off a terminal and a live line on one; `--prune 14` deletes day files older than 14 days at start. Exits 0 on TERM, 130 on ctrl+c, with the store flushed. Test drives it with a fixture engine and a stop flag. | `lib/agentmon/commands/record.rb`, `test/commands/record_test.rb` |
 | a16-memory-command | `agentmon memory` | command `memory` | Prints the RAM breakdown now with r2ui `pairs` (Total, Used, App, Wired, Compressed (ratio), Cached, Swap used/total, swap in/out and compression rates, Pressure %), then the top pressure drivers; `--json` raw. Plain in a pipe. run_cli test with preset values. | `lib/agentmon/commands/memory.rb`, `test/commands/memory_test.rb` |
 | a17-tree-command | `agentmon tree [SESSION]` | command `tree` | Prints each session's process tree with r2ui `tree` (pid name · footprint · CPU %), the session label as root; an argument (id, root pid or label substring) narrows it to one session; unknown → exit 1 with the list of sessions. run_cli test over the fixture machine. | `lib/agentmon/commands/tree.rb`, `test/commands/tree_test.rb` |

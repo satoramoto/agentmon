@@ -9,6 +9,8 @@ module Agentmon
 
       def call(processes, rates, cwds, sessions)
         cwds ||= {}
+        rates ||= {} # nil when a metric failed this sample: show what the probe has
+        sessions ||= SessionMap.new(sessions: [], by_pid: {})
         labels = sessions.sessions.to_h { |s| [s.id, s.label] }
         (processes || []).map do |p|
           rate = rates[p.pid]

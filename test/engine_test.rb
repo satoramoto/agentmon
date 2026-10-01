@@ -2,13 +2,13 @@
 
 require "test_helper"
 
-class EngineTest < Minitest::Test
+class EngineCoreTest < Minitest::Test
   include Fixtures
 
   def registry_with_recorder(every: 10, &block)
     Agentmon::Registry.new.tap do |r|
       r.add(:metric, Agentmon::Metric.new(name: :count, block: ->(reading, _state) { reading.sample[:processes].size }))
-      r.add(:recorder, Agentmon::Recorder.new(name: :counts, every:, block: block || ->(reading) { { n: reading[:count] } }))
+      r.add(:recorder, Agentmon::Recorder.new(name: :counts, every:, block: block || ->(reading, _state) { { n: reading[:count] } }))
     end
   end
 
@@ -64,13 +64,49 @@ class EngineTest < Minitest::Test
                                     recording: true, prime_gap: 0)
       engine.tick!
 
-      assert_match(/disk full/, engine.errors[:counts])
+      assert_match(/disk full/, engine.errors["recorder counts"])
     end
   end
 
-  def test_unknown_metric_names_raise
-    error = assert_raises(Agentmon::Error) { Fixtures.reading(machine(0))[:no_such_metric] }
-    assert_match(/no metric no_such_metric/, error.message)
+  def test_recorders_keep_state_per_engine
+    Dir.mktmpdir do |dir|
+      clock = Clock.new
+      store = Agentmon::Store.new(dir:, clock:)
+      registry = registry_with_recorder(every: 0) { |_reading, state| { n: state[:calls] = state.fetch(:calls, 0) + 1 } }
+      engines = Array.new(2) do
+        Agentmon::Engine.new(sampler: Sampler.new(machine(0)), registry:, store:, recording: true, prime_gap: 0, clock:)
+      end
+      2.times { engines.first.tick! }
+      engines.last.tick!
+
+      assert_equal [1, 2, 1], store.each(:counts).map { |r| r[:n] }
+    end
+  end
+
+  def test_a_metric_no_story_registers_is_nil
+    assert_nil Fixtures.reading(machine(0))[:not_merged_yet]
+  end
+
+  def test_a_raising_metric_is_nil_reported_and_stops_nothing
+    registry = Agentmon::Registry.new
+    Agentmon.registry.metrics.each { |m| registry.add(:metric, m) }
+    registry.add(:metric, Agentmon::Metric.new(name: :broken, block: ->(_reading, _state) { raise "no swap info" }))
+    engine = Agentmon::Engine.new(sampler: Sampler.new(machine(0), machine(2)), registry:, prime_gap: 0)
+    reading = engine.current
+
+    assert_nil reading[:broken]
+    assert_equal 12, reading[:process_rows].size
+    assert_equal({ "metric broken" => "RuntimeError: no swap info" }, engine.errors)
+  end
+
+  def test_a_metric_that_needs_a_failed_one_gets_nil
+    registry = Agentmon::Registry.new
+    registry.add(:metric, Agentmon::Metric.new(name: :broken, block: ->(_r, _s) { raise "boom" }))
+    registry.add(:metric, Agentmon::Metric.new(name: :user, block: ->(r, _s) { r[:broken].nil? ? :fallback : :value }))
+    reading = Agentmon::Reading.new(machine(0), metrics: registry.metrics).evaluate_all
+
+    assert_equal :fallback, reading[:user]
+    assert_equal ["broken"], reading.errors.keys.map(&:to_s)
   end
 
   def test_preset_values_stand_in_for_metrics_a_story_does_not_own

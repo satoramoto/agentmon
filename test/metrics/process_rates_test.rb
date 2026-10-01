@@ -2,7 +2,7 @@
 
 require "test_helper"
 
-class ProcessRatesTest < Minitest::Test
+class ProcessRatesMetricTest < Minitest::Test
   include Fixtures
 
   def rates(now, before) = Fixtures.reading(now, previous: before)[:process_rates]

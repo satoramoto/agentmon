@@ -2,7 +2,7 @@
 
 require "test_helper"
 
-class SessionLedgerTest < Minitest::Test
+class SessionLedgerMetricTest < Minitest::Test
   include Fixtures
 
   # Ledger after feeding these samples in order, as { root_pid => Session }.
@@ -55,6 +55,15 @@ class SessionLedgerTest < Minitest::Test
     refute sessions[303].alive?
     assert_in_delta 5.0, sessions[303].cpu_seconds
     assert_equal 0, sessions[303].footprint
+  end
+
+  def test_an_exit_nobody_reports_as_child_time_expires_from_the_pool
+    # git exits but no parent's child time ever grows (reaped outside the tree, or a zombie).
+    still = machine(0).parts[:processes].reject { |p| p.pid == 203 }
+    frozen = (1..Agentmon::Metrics::SessionLedger::PENDING_SAMPLES).map { |i| Fixtures.sample(2 * i, processes: still) }
+    grows = Fixtures.sample(12, processes: still.map { |p| p.pid == 200 ? p.with(cpu_time: p.cpu_time + 1) : p })
+
+    assert_in_delta 12.6 + 1.0, ledger(machine(0), *frozen, grows)[200].cpu_seconds # the +1 isn't swallowed
   end
 
   def test_bytes_written_add_increases_and_reused_pids_start_over

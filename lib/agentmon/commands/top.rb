@@ -16,6 +16,8 @@ module Agentmon
     module Top
       HEADERS = %w[PID Name Session CPU Footprint Resident Read Write].freeze
       RIGHT = [0, 3, 4, 5, 6, 7].freeze
+      # Seconds between the live loop's own redraws (which surface a dead ticker's error).
+      CHECK_EVERY = 1
       SORTS = { "cpu" => :cpu, "footprint" => :footprint, "resident" => :resident, "read" => :read_rate,
                 "write" => :write_rate }.freeze
 
@@ -23,6 +25,7 @@ module Agentmon
 
       def select(rows, sort: "cpu", limit: 20, all: false)
         key = SORTS.fetch(sort)
+        rows ||= [] # process_rows failed this sample: an empty table (the error goes to stderr)
         rows = rows.select(&:session) unless all
         rows.sort_by { |r| [-(r.public_send(key) || -1).to_f, r.pid] }.first(limit)
       end
@@ -60,7 +63,9 @@ module Agentmon
         table(pick.call(engine.current).map { |r| top.cells(r) }, headers: top::HEADERS, align: top::RIGHT.to_h { |i| [i, :right] })
       else
         live = R2UI::CLI::Live.new(shell, fps: 2) { top.lines(pick.call(engine.current), shell.width).join("\n") }
-        live.run { loop { sleep 1 } }
+        # `refresh` redraws on this thread: if the ticker died on a raising view, it raises that
+        # error here, Live restores the terminal, and the command fails instead of freezing.
+        live.run { loop { sleep top::CHECK_EVERY; live.refresh } }
       end
     end
   end

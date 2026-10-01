@@ -2,7 +2,7 @@
 
 require "test_helper"
 
-class ProgramTest < Minitest::Test
+class ProgramCoreTest < Minitest::Test
   include Fixtures
   include R2UI::CLI::Testing
 

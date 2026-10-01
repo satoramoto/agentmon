@@ -42,4 +42,38 @@ class TopCommandTest < Minitest::Test
   def test_off_a_terminal_top_prints_once_without_the_flag
     assert_includes top.out, "claude 200 · repo"
   end
+
+  # An engine whose sampler dies after the first frame.
+  class DyingEngine
+    def initialize(reading)
+      @reading = reading
+      @calls = 0
+    end
+
+    def current = (@calls += 1) > 1 ? raise("sampler died") : @reading
+
+    def errors = {}
+  end
+
+  def test_live_top_fails_instead_of_freezing_when_the_view_dies
+    reading = Fixtures.engine(machine(0), machine(2)).current
+    result = with_engine(DyingEngine.new(reading)) { run_cli(Agentmon::Program.build, "top", tty: true, width: 120) }
+
+    assert_equal 1, result.code
+    assert_includes result.err, "sampler died"
+    assert_includes result.out, "claude 200 · repo" # the first frame was drawn
+    assert result.out.end_with?(R2UI::CLI::Live::SHOW_CURSOR), "cursor shown again"
+  end
+
+  def test_broken_metrics_are_reported_on_stderr_not_stdout
+    registry = Agentmon::Registry.new
+    Agentmon.registry.metrics.each { |m| registry.add(:metric, m) }
+    registry.add(:metric, Agentmon::Metric.new(name: :broken, block: ->(_r, _s) { raise "no swap info" }))
+    engine = Agentmon::Engine.new(sampler: Sampler.new(machine(0), machine(2)), registry:, prime_gap: 0)
+    result = with_engine(engine) { run_cli(Agentmon::Program.build, "top", "--once") }
+
+    assert result.success?
+    assert_includes result.err, "metric broken: RuntimeError: no swap info"
+    refute_includes result.out, "no swap info"
+  end
 end

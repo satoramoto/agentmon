@@ -9,10 +9,13 @@ module Agentmon
   Probe = Data.define(:name, :every, :block)
   # A metric derives a value from samples. Its block gets the Reading and a private state Hash
   # (kept between samples, so it can accumulate) and returns `reading[name]`. Every metric runs on
-  # every sample, so stateful ones see each one.
+  # every sample, so stateful ones see each one. A metric that raises is nil for that sample (its
+  # error shows in Engine#errors), and `reading[:other]` is nil while no story registers `other`.
   Metric = Data.define(:name, :block)
-  # A recorder turns a Reading into store records (Hashes) appended under its name, at most once
-  # every `every` seconds, while the engine records (the dashboard, `agentmon record`).
+  # A recorder turns a Reading into store records (a Hash or an Array of them) appended under its
+  # name, at most once every `every` seconds, while the engine records (the dashboard,
+  # `agentmon record`). Its block gets the Reading and a private state Hash kept for the engine's
+  # life (e.g. the ids it already wrote a final line for): `{ |reading, state| ... }`.
   Recorder = Data.define(:name, :every, :block)
   # A dashboard row. Panels name the row they go in; rows without panels are left out.
   Row = Data.define(:name, :order, :height)

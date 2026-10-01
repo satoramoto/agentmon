@@ -2,7 +2,7 @@
 
 require "test_helper"
 
-class RegistryTest < Minitest::Test
+class RegistryCoreTest < Minitest::Test
   def setup = @registry = Agentmon::Registry.new
 
   def panel(name, row:, order: 100, **opts)

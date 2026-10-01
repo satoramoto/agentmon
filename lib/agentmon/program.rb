@@ -27,4 +27,12 @@ module Agentmon
 
     def start(argv = ARGV) = build.start(argv)
   end
+
+  # After any command, a broken probe, metric or recorder is reported on stderr ("⚠ metric
+  # memory: ..."), so a table with missing columns says why. stdout stays clean for scripts.
+  R2UI::CLI.extension :agentmon_errors do
+    after_run do
+      Agentmon.engine_errors.each { |name, message| shell.err_puts("#{shell.symbol(:warn)} #{name}: #{message}") }
+    end
+  end
 end

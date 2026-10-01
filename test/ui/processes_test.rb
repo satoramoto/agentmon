@@ -34,6 +34,19 @@ class ProcessesPanelTest < Minitest::Test
     end
   end
 
+  def test_a_broken_metric_shows_in_the_status_bar
+    registry = Agentmon::Registry.new
+    Agentmon.registry.metrics.each { |m| registry.add(:metric, m) }
+    registry.add(:metric, Agentmon::Metric.new(name: :broken, block: ->(_r, _s) { raise "no swap info" }))
+    engine = Agentmon::Engine.new(sampler: Sampler.new(machine(0), machine(2)), registry:, prime_gap: 0)
+    with_engine(engine) do
+      text = frame(app)
+
+      assert_includes text.lines.last, "⚠ metric broken: RuntimeError: no swap info"
+      assert_includes text, "claude 200 · repo" # the rest still draws
+    end
+  end
+
   def test_grouping_by_session_sums_members
     with_engine(Fixtures.engine(machine(0), machine(2))) do
       a = app

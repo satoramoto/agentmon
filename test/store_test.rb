@@ -2,7 +2,7 @@
 
 require "test_helper"
 
-class StoreTest < Minitest::Test
+class StoreCoreTest < Minitest::Test
   DAY = 86_400
 
   def setup

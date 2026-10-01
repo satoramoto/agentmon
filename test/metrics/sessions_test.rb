@@ -2,7 +2,7 @@
 
 require "test_helper"
 
-class SessionsTest < Minitest::Test
+class SessionsMetricTest < Minitest::Test
   include Fixtures
 
   def map(sample = machine) = Fixtures.reading(sample)[:sessions]

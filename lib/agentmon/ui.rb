@@ -37,6 +37,16 @@ module Agentmon
     end
   end
 
+  # A broken probe, metric or recorder shows on the left of the status bar ("⚠ metric memory:
+  # NoMethodError: ..."), instead of the table's sort line, until it recovers. r2ui's `status` hook
+  # is process-wide, so it checks that the agentmon dashboard is the one drawing.
+  R2UI.extension :agentmon_errors do
+    status do
+      problems = dashboard.name == UI::DASHBOARD ? Agentmon.engine_errors : {}
+      (name, message = problems.first) && "⚠ #{name}: #{message}#{" (+#{problems.size - 1} more)" if problems.size > 1}"
+    end
+  end
+
   # The rows panels go in. Stories add panels to these (or register rows of their own).
   row :top, order: 10, height: 14
   row :main, order: 100

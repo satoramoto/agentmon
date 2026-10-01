@@ -10,7 +10,7 @@
 module Agentmon
   resource :process do |engine|
     title "Processes"
-    source { engine.current[:process_rows] }
+    source { engine.current[:process_rows] || [] }
     refresh every: engine.interval
     key :pid, parent: :ppid
 

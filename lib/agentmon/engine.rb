@@ -8,10 +8,13 @@ module Agentmon
   #
   # The first call takes two samples PRIME_GAP apart: CPU % and disk rates are deltas, so the very
   # first frame or `agentmon top --once` already has them.
+  #
+  # Metrics and recorders get a state Hash kept for this engine's life (one per metric, one per
+  # recorder), so nothing needs module-level state and two engines (tests) never share it.
   class Engine
     PRIME_GAP = 0.5
 
-    attr_reader :interval, :store, :run_id, :errors
+    attr_reader :interval, :store, :run_id
     attr_accessor :recording
 
     def initialize(sampler: Sampler.new, registry: Agentmon.registry, store: nil, recording: false, interval: 2.0,
@@ -24,9 +27,9 @@ module Agentmon
       @prime_gap = prime_gap
       @clock = clock
       @lock = Mutex.new
-      @states = Hash.new { |h, k| h[k] = {} }
+      @states = Hash.new { |h, k| h[k] = {} } # metric name => state; [:recorder, name] => state
       @recorded_at = {}
-      @errors = {}
+      @recorder_errors = {}
       @run_id = "#{Process.pid}-#{clock.now.to_i}"
     end
 
@@ -54,6 +57,18 @@ module Agentmon
       @reading = reading
     end
 
+    # What's broken right now: { "probe cwd" => "Errno::ENOENT: ...", "metric memory" => ...,
+    # "recorder sessions" => ... } from the latest sample's probes, the latest reading's metrics and
+    # the recorders' last runs. The dashboard's status bar and the CLI's stderr show it.
+    def errors
+      reading = @reading
+      found = {}
+      reading&.sample&.errors&.each { |name, message| found["probe #{name}"] = message }
+      reading&.errors&.each { |name, message| found["metric #{name}"] = message }
+      @recorder_errors.each { |name, message| found["recorder #{name}"] = message }
+      found
+    end
+
     private
 
     def record(reading)
@@ -62,12 +77,12 @@ module Agentmon
         next if last && @ticked_at - last < recorder.every
 
         @recorded_at[recorder.name] = @ticked_at
-        rows = recorder.block.call(reading)
+        rows = recorder.block.call(reading, @states[[:recorder, recorder.name]])
         rows = [rows] if rows.is_a?(Hash) # Array(hash) would split it into pairs
         Array(rows).each { |row| @store.append(recorder.name, row.merge(run: run_id)) }
-        @errors.delete(recorder.name)
+        @recorder_errors.delete(recorder.name)
       rescue StandardError => e
-        @errors[recorder.name] = "#{e.class}: #{e.message}"
+        @recorder_errors[recorder.name] = "#{e.class}: #{e.message}"
       end
     end
   end

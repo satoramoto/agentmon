@@ -25,6 +25,9 @@ module Agentmon
     def engine = @engine ||= Engine.new(store: Store.new)
 
     attr_writer :engine
+
+    # Engine#errors, or {} when nothing has built an engine yet (e.g. `agentmon --help`).
+    def engine_errors = @engine ? @engine.errors : {}
   end
 end
 

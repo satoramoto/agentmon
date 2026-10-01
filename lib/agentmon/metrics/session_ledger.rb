@@ -13,7 +13,8 @@
 #   and exit between two samples are still counted, through their parent.
 #   That also means a member that exits is about to be counted again inside its parent's child
 #   time, so its last seen total goes into the session's `pending` pool and is subtracted from the
-#   session's next growth. When a CLI session ends under a parent in another session (Claude Code
+#   session's next growth (for PENDING_SAMPLES samples; then it expires, so a parent outside the
+#   tree or a zombie nobody reaps can't swallow real growth). When a CLI session ends under a parent in another session (Claude Code
 #   under the desktop app), its root's total goes into that session's pool the same way.
 #   A member that leaves the tree alive (an orphan reparented to launchd) keeps what it was
 #   counted and stops counting.
@@ -25,6 +26,8 @@ module Agentmon
   module Metrics
     class SessionLedger
       KEEP_ENDED = 15 * 60
+      # Samples an exited member's CPU time waits to reappear as its parent's child time.
+      PENDING_SAMPLES = 5
 
       # Mutable per-session accumulator (the metric's state); `to_session` makes the record.
       Account = Struct.new(:info, :first_seen_at, :last_seen_at, :ended_at, :pending, :cpu_seconds, :bytes_read,
@@ -38,7 +41,10 @@ module Agentmon
         accounts = (@state[:accounts] ||= {})
         seen = @state[:seen] || {} # identity => [session id, cpu total, disk read, disk written]
         map = reading[:sessions]
-        rates = reading[:process_rates]
+        # Attribution failed this sample: keep every account as it was rather than end them all.
+        return sessions(accounts) unless map
+
+        rates = reading[:process_rates] || {}
         processes = reading.sample[:processes] || []
         live = processes.select(&:readable).to_h { |p| [p.identity, true] }
         at = reading.at
@@ -48,15 +54,37 @@ module Agentmon
         members = processes.group_by { |p| map.by_pid[p.pid] }
         @state[:seen] = next_seen = {}
         map.sessions.each do |info|
-          account = accounts[info.id] ||= Account.new(info:, first_seen_at: at, pending: 0.0, cpu_seconds: 0.0,
+          account = accounts[info.id] ||= Account.new(info:, first_seen_at: at, pending: [], cpu_seconds: 0.0,
                                                       bytes_read: 0, bytes_written: 0, peak_footprint: 0)
           update(account, info, members.fetch(info.id, []), rates, seen, next_seen, at, map)
         end
         accounts.delete_if { |_, a| a.ended_at && at - a.ended_at > KEEP_ENDED }
-        accounts.values.sort_by { |a| [a.info.started_at || a.first_seen_at, a.info.id] }.map { |a| to_session(a) }
+        sessions(accounts)
       end
 
       private
+
+      def sessions(accounts)
+        accounts.values.sort_by { |a| [a.info.started_at || a.first_seen_at, a.info.id] }.map { |a| to_session(a) }
+      end
+
+      # Pending CPU seconds wait PENDING_SAMPLES samples for the parent to report them as child time
+      # (it reaps within milliseconds); if it never does (reaped outside the session, a zombie
+      # nobody reaps), they expire so the session's real growth isn't swallowed.
+      def expect_handover(account, seconds) = account.pending << [seconds, PENDING_SAMPLES]
+
+      # Takes up to `grown` seconds out of the pending pool, oldest first; returns what it took.
+      def absorb(account, grown)
+        taken = 0.0
+        account.pending.each do |entry|
+          take = [entry[0], grown - taken].min
+          entry[0] -= take
+          taken += take
+        end
+        account.pending.each { |entry| entry[1] -= 1 }
+        account.pending.reject! { |amount, left| amount <= 0 || left <= 0 }
+        taken
+      end
 
       def end_missing(accounts, map, _at)
         alive = map.sessions.to_h { |s| [s.id, true] }
@@ -75,10 +103,10 @@ module Agentmon
 
           account = accounts[session_id] or next
           if account.alive?
-            account.pending += total
+            expect_handover(account, total)
           elsif identity[0] == account.info.root_pid && account.info.kind == :cli
             heir = accounts[account.parent_session]
-            heir.pending += total if heir&.alive?
+            expect_handover(heir, total) if heir&.alive?
           end
         end
       end
@@ -95,9 +123,7 @@ module Agentmon
           account.bytes_written += was ? [p.disk_written - was[3], 0].max : p.disk_written
           next_seen[p.identity] = [info.id, total, p.disk_read, p.disk_written]
         end
-        absorbed = [grown, account.pending].min
-        account.pending -= absorbed
-        account.cpu_seconds += grown - absorbed
+        account.cpu_seconds += grown - absorb(account, grown)
 
         footprint = readable.sum(&:footprint)
         account.peak_footprint = [account.peak_footprint, footprint].max
