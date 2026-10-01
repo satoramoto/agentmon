@@ -89,7 +89,9 @@ class MemoryCommandTest < Minitest::Test
   end
 
   def test_without_pressure_drivers_only_the_breakdown_prints
-    result = memory(values: { memory: view })
+    # nil preset: drivers unknown this sample (a03 registers the metric by default, so leaving
+    # the key out would compute it from the fixture sample).
+    result = memory(values: { memory: view, pressure_drivers: nil })
 
     assert result.success?, result.err
     assert_includes result.out, "Total"
