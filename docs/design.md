@@ -77,7 +77,7 @@ No subprocess per process, ever.
 | `lib/agentmon/recorders/*.rb` | one recorder each | stories |
 | `lib/agentmon/ui/*.rb` | resources, panels, dashboard behaviour | stories |
 | `lib/agentmon/commands/*.rb` | one command each | stories |
-| `test/support/fixtures.rb`, `test/test_helper.rb` | fixtures and helpers | contract PR |
+| `test/support/fixtures.rb`, `test/support/dashboard.rb`, `test/test_helper.rb` | fixtures and helpers | contract PR |
 
 Extension files load directory by directory (probes, metrics, recorders, ui, commands), each in
 name order. Nothing may depend on load order inside a directory: metrics find each other by name
@@ -182,9 +182,14 @@ Mach tick conversion and EPERM fallback) with `test/probes/processes_test.rb` an
   `module Agentmon::Metrics::ProcessRates`, `ProcessRates.new` would mean the module, not the
   model (this bit the first articles; that module is `Metrics::Rates`). `grep -rn "module <Name>\|class <Name>\|<Name> = Data" lib/` first.
 - Tests are machine-independent: `test/support/fixtures.rb` (`Fixtures.process`, `.sample`,
-  `.machine`, `.engine`, `.reading`, `Fixtures::Clock`). Dashboard tests install the UI and draw
-  frames (`app.frame(w, h).plain_lines`, `app.press`), as `test/ui/processes_test.rb` does,
-  inside `with_engine(Fixtures.engine(...))`. Command tests use `R2UI::CLI::Testing#run_cli`
+  `.machine`, `.engine`, `.reading`, `Fixtures::Clock`). Dashboard tests use
+  `test/support/dashboard.rb`, as `test/ui/processes_test.rb` does, inside
+  `with_engine(Fixtures.engine(...))`: `dashboard_app` (installed, feeds refreshed, keys on the
+  Processes panel), `app.press`, and `dashboard_frame(app, focus: :process)` (200x50 plain text,
+  focus set explicitly first; `focus: nil` keeps the current one). Never build `R2UI::App` or call
+  `app.frame(w, h)` with a small size yourself: other stories' panels share the screen, so rows
+  fall off a small frame, columns truncate, and r2ui gives keys to the first panel with a table.
+  Press keys meant for another panel after `focus_panel(app, :name)`. Command tests use `R2UI::CLI::Testing#run_cli`
   against `Agentmon::Program.build`. Live macOS checks go in `test/live/<file>_test.rb`, start with
   `macos!`, stay few and fast, and never assume root.
 - Test file per story: `test/<dir>/<file>_test.rb` for `lib/agentmon/<dir>/<file>.rb`.

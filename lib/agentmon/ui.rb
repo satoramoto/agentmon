@@ -9,6 +9,8 @@ module Agentmon
   #   R2UI.snapshot(:agentmon, width: 140, height: 40)
   module UI
     DASHBOARD = :agentmon
+    # The panel that has key focus when the dashboard opens.
+    FOCUS = :process
 
     module_function
 
@@ -44,6 +46,17 @@ module Agentmon
     status do
       problems = dashboard.name == UI::DASHBOARD ? Agentmon.engine_errors : {}
       (name, message = problems.first) && "⚠ #{name}: #{message}#{" (+#{problems.size - 1} more)" if problems.size > 1}"
+    end
+  end
+
+  # The dashboard opens with keys on the Processes panel, whatever panels come before it (r2ui
+  # otherwise focuses the first panel with a table). Runs in App.new, so snapshots see it too.
+  R2UI.extension :agentmon_focus do
+    setup do
+      next unless dashboard.name == UI::DASHBOARD
+
+      panel = dashboard.panels.find { |p| p.name == UI::FOCUS }
+      app.focus = panel if panel
     end
   end
 

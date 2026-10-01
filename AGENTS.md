@@ -11,11 +11,11 @@ A macOS terminal monitor for what AI coding agents (Claude, Codex) cost the mach
 | `COLUMNS=150 LINES=40 bundle exec exe/agentmon \| cat` | After changing a panel or the dashboard: prints one real frame of this Mac (plain, no terminal needed) |
 | `bundle exec exe/agentmon top --once \| cat` | After changing process data or a command: one plain table |
 
-Tests run on fixtures (`test/support/fixtures.rb`); only `test/live/*_test.rb` read the real machine (macOS only, a few seconds, never as root). The interactive dashboard needs a terminal; tests drive it through r2ui's `App#press` and `App#frame`.
+Tests run on fixtures (`test/support/fixtures.rb`); only `test/live/*_test.rb` read the real machine (macOS only, a few seconds, never as root). The interactive dashboard needs a terminal; tests drive it through `test/support/dashboard.rb`: `dashboard_app`, `app.press` and `dashboard_frame(app, focus: :process)` (a 200x50 frame with focus set explicitly), never a hand-sized `app.frame(w, h)`, since every story's panels share the screen.
 
 CI (`.github/workflows/ci.yml`, macos-latest) is the final check.
 
-The Gemfile uses the sibling `../r2ui` checkout when present, else r2ui's `main` on GitHub. Don't change r2ui from this repo; report what you need from it.
+The Gemfile uses the sibling r2ui checkout when present (`../r2ui` from the main checkout, `../../r2ui` from a worktree in `agentmon-wt/<id>/`), else r2ui's `main` on GitHub. Don't change r2ui from this repo; report what you need from it.
 
 ## Factory
 
@@ -23,7 +23,7 @@ Built by the software-factory job shop: `factory/job-shop.js` (dispatcher), `fac
 
 **Design and story list:** `docs/design.md` (architecture, data model and units, extension points, rules for story work, stories `a01-...`). A story adds only its listed files.
 
-**Shared files** (change only through a small contract PR): `lib/agentmon.rb`, `lib/agentmon/{model,registry,darwin,sampler,reading,engine,store,ui,program}.rb`, `test/test_helper.rb`, `test/support/fixtures.rb`, `exe/agentmon`, `Gemfile`, `Rakefile`, `.github/workflows/ci.yml`, this file, `docs/design.md`.
+**Shared files** (change only through a small contract PR): `lib/agentmon.rb`, `lib/agentmon/{model,registry,darwin,sampler,reading,engine,store,ui,program}.rb`, `test/test_helper.rb`, `test/support/*.rb`, `exe/agentmon`, `Gemfile`, `Rakefile`, `.github/workflows/ci.yml`, this file, `docs/design.md`.
 
 `r2ui-feedback.md` collects what was awkward, missing or buggy in r2ui while building agentmon. Stories don't edit it (it would conflict): put r2ui feedback, with file and line, in your PR body and result; the plant manager folds it in.
 
