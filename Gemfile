@@ -3,8 +3,10 @@
 source "https://rubygems.org"
 
 # A sibling r2ui checkout when there is one (local work on both), otherwise main on GitHub (CI).
-if File.directory?(File.expand_path("../r2ui", __dir__))
-  gem "r2ui", path: "../r2ui"
+# `../r2ui` from the main checkout, `../../r2ui` from a worktree in agentmon-wt/<id>/.
+r2ui_path = %w[../r2ui ../../r2ui].find { |p| File.exist?(File.expand_path("#{p}/r2ui.gemspec", __dir__)) }
+if r2ui_path
+  gem "r2ui", path: r2ui_path
 else
   gem "r2ui", github: "satoramoto/r2ui", branch: "main"
 end

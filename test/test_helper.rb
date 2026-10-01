@@ -5,9 +5,12 @@ require "tmpdir"
 require "agentmon"
 require "r2ui/cli/testing"
 require_relative "support/fixtures"
+require_relative "support/dashboard"
 
 module Minitest
   class Test
+    include DashboardFrames
+
     # Runs the block with Agentmon.engine swapped (and R2UI's dashboards cleared), restoring both.
     def with_engine(engine)
       previous = Agentmon.instance_variable_get(:@engine)
