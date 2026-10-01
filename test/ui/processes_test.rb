@@ -11,8 +11,7 @@ class ProcessesPanelTest < Minitest::Test
     R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).tap { |a| a.feeds.each_value(&:refresh!) }
   end
 
-  # Tall enough for the :top row (14 lines) above Processes and all its fixture rows.
-  def frame(app, width: 150, height: 40) = app.frame(width, height).plain_lines.join("\n")
+  def frame(app, width: 150, height: 20) = app.frame(width, height).plain_lines.join("\n")
 
   def test_shows_agent_processes_with_footprint_and_rates_by_default
     with_engine(Fixtures.engine(machine(0), machine(2))) do
