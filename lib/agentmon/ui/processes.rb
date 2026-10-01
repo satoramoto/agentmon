@@ -37,5 +37,6 @@ module Agentmon
     filter :name, :cwd, :session, :path
   end
 
-  panel :process, row: :main, order: 100
+  # span 3: a detail pane beside it (span 1) takes a quarter of the row.
+  panel :process, row: :main, order: 100, span: 3
 end
