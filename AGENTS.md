@@ -1,0 +1,28 @@
+# agentmon
+
+A macOS terminal monitor for what AI coding agents (Claude, Codex) cost the machine: per-session CPU, real memory and disk I/O, memory pressure, and a history of runs. Built on [r2ui](https://github.com/satoramoto/r2ui) (dashboards with `require "r2ui"`, CLI output with `require "r2ui/cli"`), as a real consumer of that library: if r2ui gets in the way, say so in your result (that feedback is part of the product).
+
+## Tests
+
+| Command | When |
+|---|---|
+| `bundle exec rake test` | After any change; CI runs it on macOS |
+| `bundle exec ruby -Itest -Ilib test/<file>_test.rb` | Targeted: one file |
+
+CI (`.github/workflows/ci.yml`, macos-latest) is the final check.
+
+The Gemfile uses the sibling `../r2ui` checkout when present, else r2ui's `main` on GitHub. Don't change r2ui from this repo; report what you need from it.
+
+## Factory
+
+Built by the software-factory job shop: `factory/job-shop.js` (dispatcher), `factory/stations/*.md` (station SOPs). The plant manager merges; stations never merge.
+
+**Shared files** (change only through a small contract PR): `lib/agentmon.rb`, the extension/registry files the design names, `Gemfile`, `Rakefile`, `.github/workflows/ci.yml`, this file, `docs/design.md`.
+
+## Review checklist
+
+Reviewers flag only real bugs and these rules, never style:
+- Wrong numbers: units (bytes vs KiB, Mach ticks vs ns), rates computed across a pid that was reused, totals that double count a process tree.
+- Sampling that's too slow for a 1–2 s refresh, or that spawns a subprocess per process.
+- Terminal state not restored on every exit path.
+- A story editing files outside the ones it may add.
