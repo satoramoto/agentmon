@@ -19,16 +19,9 @@ class SessionsPanelTest < Minitest::Test
 
   # The dashboard with the Sessions panel focused and zoomed (z), so it has the whole frame however
   # many panels share its row.
-  def app
-    Agentmon::UI.install(engine: Agentmon.engine)
-    R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).tap do |a|
-      a.focus = a.dashboard.panels.find { |p| p.name == :session }
-      a.feeds.each_value(&:refresh!)
-      a.press("z")
-    end
-  end
+  def app = dashboard_app(focus: :session).tap { |a| a.press("z") }
 
-  def frame(app, width: 200, height: 40) = app.frame(width, height).plain_lines
+  def frame(app) = dashboard_frame(app, focus: :session).lines(chomp: true)
 
   def line_of(lines, text) = lines.find { |l| l.include?(text) } || flunk("no line with #{text.inspect}:\n#{lines.join("\n")}")
 
@@ -95,9 +88,7 @@ class SessionsPanelTest < Minitest::Test
 
   def test_processes_keeps_focus_with_sessions_above_it
     with_engine(prime(Fixtures.engine(machine(0), machine(2)))) do
-      Agentmon::UI.install(engine: Agentmon.engine)
-
-      assert_equal :process, R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).focus.name
+      assert_equal :process, dashboard_app(focus: nil).focus.name # r2ui's choice plus agentmon's default
     end
   end
 
