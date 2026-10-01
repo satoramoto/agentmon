@@ -22,13 +22,10 @@ class ProcessDetailPanelTest < Minitest::Test
     Detail.command_reader, Detail.file_counter = @previous
   end
 
-  def app
-    Agentmon::UI.install(engine: Agentmon.engine)
-    R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).tap { |a| a.feeds.each_value(&:refresh!) }
-  end
+  def app = dashboard_app
 
-  # Tall enough for a 14-line :top row (other stories' panels) plus the whole Detail pane.
-  def frame(app, width: 160, height: 44) = app.frame(width, height).plain_lines.join("\n")
+  # The full dashboard, keys on Processes (the Detail pane follows its selection).
+  def frame(app) = dashboard_frame(app)
 
   def process_panel(app) = app.dashboard.panels.find { |p| p.name == :process }
 
