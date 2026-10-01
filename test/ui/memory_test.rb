@@ -88,11 +88,22 @@ class MemoryPanelTest < Minitest::Test
     end
   end
 
+  # A dashboard holding only the Memory panel in a 14-line row, so its width doesn't depend on
+  # which other panels share the :top row.
+  def memory_only(width:)
+    engine = Agentmon.engine
+    Agentmon::UI.install(engine:)
+    items = Agentmon.registry[:panel, :memory].block
+    R2UI.registry.add_dashboard(R2UI::DSL::Dashboard.build(:memory_only) do
+      row(height: 14) { panel(:memory) { instance_exec(engine, &items) } }
+    end)
+    R2UI::App.new(R2UI.registry, :memory_only).tap { |a| a.feeds.each_value(&:refresh!) }
+             .frame(width, 15).plain_lines.first(14).join("\n")
+  end
+
   def test_fits_a_third_of_a_150_column_screen
     with_engine(engine_with(memory: VIEW, drivers: DRIVERS)) do
-      text = Agentmon::UI.install(engine: Agentmon.engine).then do
-        R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).tap { |a| a.feeds.each_value(&:refresh!) }
-      end.frame(50, 40).plain_lines.first(14).join("\n")
+      text = memory_only(width: 50)
 
       assert_match(/12G \/ 16G 75%/, text)
       assert_match(/Decompress\s+3\.0M\/s/, text)
