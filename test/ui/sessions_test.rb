@@ -17,12 +17,14 @@ class SessionsPanelTest < Minitest::Test
     engine
   end
 
-  # The dashboard with the Sessions panel focused (another story's panel may come first in the row).
+  # The dashboard with the Sessions panel focused and zoomed (z), so it has the whole frame however
+  # many panels share its row.
   def app
     Agentmon::UI.install(engine: Agentmon.engine)
     R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).tap do |a|
       a.focus = a.dashboard.panels.find { |p| p.name == :session }
       a.feeds.each_value(&:refresh!)
+      a.press("z")
     end
   end
 
@@ -84,10 +86,10 @@ class SessionsPanelTest < Minitest::Test
     Agentmon.registry.metrics.reject { |m| m.name == :session_ledger }.each { |m| registry.add(:metric, m) }
     engine = Agentmon::Engine.new(sampler: Fixtures::Sampler.new(machine(0), machine(2)), registry:, prime_gap: 0)
     with_engine(engine) do
-      top = frame(app).first(14).join("\n") # the top row; the Processes panel below still has sessions
+      text = frame(app).join("\n") # zoomed: only the Sessions panel, though Processes still has sessions
 
-      assert_includes top, "Sessions"
-      refute_includes top, "claude 200"
+      assert_includes text, "Sessions"
+      refute_includes text, "claude 200"
     end
   end
 
