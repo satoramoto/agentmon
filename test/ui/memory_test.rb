@@ -39,15 +39,8 @@ class MemoryPanelTest < Minitest::Test
     Agentmon::Engine.new(sampler: Sampler.new(machine(0), machine(2)), registry:, prime_gap: 0)
   end
 
-  def app
-    Agentmon::UI.install(engine: Agentmon.engine)
-    R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).tap { |a| a.feeds.each_value(&:refresh!) }
-  end
-
-  # The top row's lines (the Memory panel and whatever shares the row), width 150.
-  def top_row(width: 150)
-    app.frame(width, 40).plain_lines.first(14).join("\n")
-  end
+  # The top row's lines (the Memory panel and whatever shares the row) of the full dashboard.
+  def top_row = dashboard_frame(dashboard_app).lines.first(14).join
 
   def test_shows_each_number_in_its_unit
     with_engine(engine_with(memory: VIEW, drivers: DRIVERS)) do
