@@ -27,7 +27,8 @@ class ProcessDetailPanelTest < Minitest::Test
     R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).tap { |a| a.feeds.each_value(&:refresh!) }
   end
 
-  def frame(app, width: 160, height: 24) = app.frame(width, height).plain_lines.join("\n")
+  # Tall enough for a 14-line :top row (other stories' panels) plus the whole Detail pane.
+  def frame(app, width: 160, height: 44) = app.frame(width, height).plain_lines.join("\n")
 
   def process_panel(app) = app.dashboard.panels.find { |p| p.name == :process }
 
