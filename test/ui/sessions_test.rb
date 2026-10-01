@@ -91,6 +91,14 @@ class SessionsPanelTest < Minitest::Test
     end
   end
 
+  def test_processes_keeps_focus_with_sessions_above_it
+    with_engine(prime(Fixtures.engine(machine(0), machine(2)))) do
+      Agentmon::UI.install(engine: Agentmon.engine)
+
+      assert_equal :process, R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).focus.name
+    end
+  end
+
   def test_age_formats
     age = Agentmon::UI::SessionsPanel.method(:age)
 

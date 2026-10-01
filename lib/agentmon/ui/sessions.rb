@@ -85,4 +85,14 @@ module Agentmon
   end
 
   panel :session, row: :top, order: 20, span: 2
+
+  # r2ui focuses the first table panel, which is now Sessions (top row). Keys and the first
+  # frame belong to Processes, so give it focus when the agentmon dashboard starts. Stopgap
+  # until the core focuses :process itself.
+  R2UI.extension :agentmon_sessions_focus do
+    setup do
+      process = dashboard.name == UI::DASHBOARD && dashboard.panels.find { |p| p.name == :process }
+      app.focus = process if process
+    end
+  end
 end
