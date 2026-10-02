@@ -61,7 +61,7 @@ class FocusCoreTest < Minitest::Test
   end
 
   def test_missing_metrics_stay_nil_when_focused
-    focused = Agentmon::Focus.apply(Fixtures.reading(machine(0), values: { process_rows: nil }), REPO)
+    focused = Agentmon::Focus.apply(Fixtures.reading(machine(0), values: { process_rows: nil, session_memory: nil }), REPO)
 
     assert_nil focused[:process_rows]
     assert_nil focused[:session_memory]
