@@ -8,12 +8,9 @@ require "test_helper"
 class ProcessScopesPanelTest < Minitest::Test
   include Fixtures
 
-  def app
-    Agentmon::UI.install(engine: Agentmon.engine)
-    R2UI::App.new(R2UI.registry, Agentmon::UI::DASHBOARD).tap { |a| a.feeds.each_value(&:refresh!) }
-  end
+  def app = dashboard_app(focus: :process)
 
-  def frame(app, width: 150, height: 24) = app.frame(width, height).plain_lines.join("\n")
+  def frame(app) = dashboard_frame(app, focus: :process)
 
   # The pids shown as table rows (a row starts with its pid in the first column).
   def pids(text) = text.scan(/^\W*(\d+)\s+\S/).flatten.map(&:to_i).select { |p| [1, 100, 200, 201, 202, 203, 300, 301, 302, 303, 400, 500].include?(p) }.sort
