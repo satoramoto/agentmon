@@ -4,8 +4,9 @@ require "fiddle"
 
 module Agentmon
   # macOS kernel data through Fiddle, without subprocesses: per-process resource usage
-  # (proc_pid_rusage, RUSAGE_INFO_V4), process start time (proc_pidinfo PROC_PIDTBSDINFO) and the
-  # Mach clock (mach_timebase_info).
+  # (proc_pid_rusage, RUSAGE_INFO_V4), process start time plus fault and scheduling counters
+  # (proc_pidinfo PROC_PIDTASKALLINFO; PROC_PIDTBSDINFO for the start time alone) and the Mach
+  # clock (mach_timebase_info).
   #
   # Units: CPU times come from the kernel in Mach absolute-time ticks. On Intel a tick is 1 ns; on
   # Apple Silicon it is 125/3 ns (41.67 ns), so ticks are always converted with the timebase and
@@ -19,16 +20,23 @@ module Agentmon
     # ri_runnable_time) = 296 bytes. v5 and v6 append fields; v4 is what we ask for.
     RUSAGE_FIELDS = 35
     RUSAGE_SIZE = 16 + (8 * RUSAGE_FIELDS)
+    PROC_PIDTASKALLINFO = 2
     PROC_PIDTBSDINFO = 3
     # struct proc_bsdinfo is 136 bytes; pbi_start_tvsec/usec are its last two uint64 fields.
     BSDINFO_SIZE = 136
     BSDINFO_START = 120
+    # struct proc_taskallinfo = proc_bsdinfo (136) + proc_taskinfo (96): six uint64s
+    # (pti_virtual_size .. pti_threads_system), then twelve int32s (pti_policy .. pti_priority).
+    TASKINFO_SIZE = 96
+    TASKALLINFO_SIZE = BSDINFO_SIZE + TASKINFO_SIZE
+    # Indexes of the int32 fields after the six uint64s (xnu bsd/sys/proc_info.h).
+    TASK_FIELDS = { faults: 1, pageins: 2, cow_faults: 3, csw: 8, threadnum: 9, numrunning: 10 }.freeze
 
     # Indexes of the uint64 fields after the uuid (xnu bsd/sys/resource.h).
     FIELDS = {
-      user_time: 0, system_time: 1, resident_size: 6, phys_footprint: 7, proc_start_abstime: 8,
-      child_user_time: 10, child_system_time: 11, diskio_bytesread: 16, diskio_byteswritten: 17,
-      lifetime_max_phys_footprint: 28
+      user_time: 0, system_time: 1, pageins: 4, wired_size: 5, resident_size: 6, phys_footprint: 7,
+      proc_start_abstime: 8, child_user_time: 10, child_system_time: 11, diskio_bytesread: 16,
+      diskio_byteswritten: 17, lifetime_max_phys_footprint: 28, runnable_time: 34
     }.freeze
 
     EPERM = 1
@@ -43,7 +51,23 @@ module Agentmon
       :peak_footprint,  # lifetime maximum footprint, bytes
       :disk_read,       # bytes read from disk
       :disk_written,    # bytes written to disk
-      :start_ticks      # start time in Mach ticks: with the pid, identifies the process across pid reuse
+      :start_ticks,     # start time in Mach ticks: with the pid, identifies the process across pid reuse
+      :wired,           # wired bytes
+      :pageins,         # count of faults that read from disk
+      :runnable_time    # seconds runnable (running or waiting for a CPU)
+    ) do
+      def initialize(wired: nil, pageins: nil, runnable_time: nil, **) = super
+    end
+
+    # proc_taskallinfo, decoded: start time plus the task's fault and scheduling counters.
+    # Counts are the kernel's 32-bit counters, read unsigned (they wrap at 2**32).
+    TaskInfo = Data.define(
+      :started_at,       # epoch seconds (Float)
+      :faults,           # page faults, any kind
+      :cow_faults,       # copy-on-write faults
+      :context_switches,
+      :threads,          # threads now
+      :running_threads   # threads running now
     )
 
     class << self
@@ -74,7 +98,12 @@ module Agentmon
           peak_footprint: f[:lifetime_max_phys_footprint],
           disk_read: f[:diskio_bytesread],
           disk_written: f[:diskio_byteswritten],
-          start_ticks: f[:proc_start_abstime]
+          start_ticks: f[:proc_start_abstime],
+          wired: f[:wired_size],
+          pageins: f[:pageins],
+          # Mach ticks, like the CPU times (checked: 30 busy processes on 10 cores for 2 s report
+          # ~2.0 s runnable as ticks, 0.05 s if they were ns; it counts time on a CPU too).
+          runnable_time: ticks_to_seconds(f[:runnable_time])
         )
       end
 
@@ -83,8 +112,27 @@ module Agentmon
         buffer = Fiddle::Pointer.malloc(BSDINFO_SIZE, Fiddle::RUBY_FREE)
         return fail_with(Fiddle.last_error) unless functions[:pidinfo].call(pid, PROC_PIDTBSDINFO, 0, buffer, BSDINFO_SIZE) == BSDINFO_SIZE
 
-        sec, usec = buffer[BSDINFO_START, 16].unpack("QQ")
-        sec + (usec / 1_000_000.0)
+        decode_start(buffer[0, BSDINFO_SIZE])
+      end
+
+      # Start time plus fault and scheduling counters in one proc_pidinfo(PROC_PIDTASKALLINFO)
+      # call (the same cost as PROC_PIDTBSDINFO alone), or nil when unreadable.
+      def task_info(pid)
+        buffer = Fiddle::Pointer.malloc(TASKALLINFO_SIZE, Fiddle::RUBY_FREE)
+        unless functions[:pidinfo].call(pid, PROC_PIDTASKALLINFO, 0, buffer, TASKALLINFO_SIZE) == TASKALLINFO_SIZE
+          return fail_with(Fiddle.last_error)
+        end
+
+        Thread.current[:agentmon_errno] = 0
+        decode_task_info_bytes(buffer[0, TASKALLINFO_SIZE])
+      end
+
+      # Decodes a whole proc_taskallinfo as the kernel wrote it. Public for tests.
+      def decode_task_info_bytes(bytes)
+        counts = bytes.byteslice(BSDINFO_SIZE + 48, 48).unpack("L<12") # unsigned: wrapped counters stay positive
+        c = ->(name) { counts.fetch(TASK_FIELDS.fetch(name)) }
+        TaskInfo.new(started_at: decode_start(bytes), faults: c[:faults], cow_faults: c[:cow_faults],
+                     context_switches: c[:csw], threads: c[:threadnum], running_threads: c[:numrunning])
       end
 
       # errno of the last failed read on this thread (EPERM, ESRCH, ...), 0 after a success.
@@ -106,6 +154,12 @@ module Agentmon
       def ticks_to_seconds(ticks) = (ticks * ns_per_tick).fdiv(1_000_000_000)
 
       private
+
+      # pbi_start_tvsec/usec from the head of a proc_bsdinfo (or proc_taskallinfo).
+      def decode_start(bytes)
+        sec, usec = bytes.byteslice(BSDINFO_START, 16).unpack("Q<Q<")
+        sec + (usec / 1_000_000.0)
+      end
 
       def fail_with(errno)
         Thread.current[:agentmon_errno] = errno

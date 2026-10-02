@@ -21,6 +21,9 @@ require "fiddle"
 # while it stays). The open file count is `proc_pidinfo(PROC_PIDLISTFDS)` through Fiddle. Root's
 # processes can't be read without root: their footprint, CPU time, disk, start and open files say
 # "not readable without root"; resident size is ps's. A group line (g) shows its process count.
+#
+# Other stories add lines below these with `Agentmon.detail_section` (lib/agentmon/registry.rb)
+# instead of editing this file.
 module Agentmon
   module UI
     module ProcessDetail
@@ -47,10 +50,23 @@ module Agentmon
           row = line.rows.find { |r| r.pid == line.id } || (line.rows.first if line.rows.size == 1)
           return "#{line.label}\n#{line.rows.size} processes: ungroup (g) to pick one" unless row
 
-          lines(row, command(app, row), now: engine.current.at, width:).join("\n")
+          reading = engine.current
+          lines(row, command(app, row), now: reading.at, width:, reading:).join("\n")
         end
 
-        def lines(row, command, now:, width:)
+        # The process's own lines, then each registered `Agentmon.detail_section`'s.
+        def lines(row, command, now:, width:, reading: nil, sections: Agentmon.registry.detail_sections)
+          [*own_lines(row, command, now:, width:), *sections.flat_map { |s| section_lines(s, row, reading) }]
+        end
+
+        # A section that raises shows its error instead of breaking the panel.
+        def section_lines(section, row, reading)
+          section.block.call(row, reading).map { |label, value| pair(label.to_s, value || "unknown") }
+        rescue StandardError => e
+          [pair(section.name.to_s, "#{e.class}: #{e.message}")]
+        end
+
+        def own_lines(row, command, now:, width:)
           readable = row.readable
           rusage = ->(value) { readable ? value : UNREADABLE }
           files = file_counter.call(row.pid)

@@ -35,6 +35,25 @@ class TopCommandTest < Minitest::Test
     assert_equal %w[200 300], result.out.lines.drop(1).map { |l| l.split.first }
   end
 
+  def test_session_narrows_to_one_session_by_label_id_or_root_pid
+    %w[repo 200 claude-200-1789996600].each do |query|
+      result = top("--once", "--session", query)
+
+      assert result.success?, result.err
+      assert_equal %w[200 201 202 203], result.out.lines.drop(1).map { |l| l.split.first }.sort, query
+    end
+  end
+
+  def test_session_that_matches_nothing_or_several_exits_1_with_the_list
+    none = top("--once", "--session", "nope")
+    many = top("--once", "--session", "claude")
+
+    assert_equal 1, none.code
+    assert_includes none.err, "claude 200 · repo"
+    assert_equal 1, many.code
+    assert_match(/matches 3 sessions/, many.err)
+  end
+
   def test_unknown_sort_is_a_usage_error
     assert_equal 2, top("--sort", "nope").code
   end

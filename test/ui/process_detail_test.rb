@@ -106,4 +106,20 @@ class ProcessDetailPanelTest < Minitest::Test
       assert_includes frame(app), "/usr/bin/claude"
     end
   end
+
+  # Agentmon.detail_section: other stories' lines go under the process's own; one that raises
+  # shows its error instead of breaking the pane.
+  def test_detail_sections_add_lines_in_order
+    ok = Agentmon::DetailSection.new(name: :waits, order: 10, block: ->(row, reading) { [["Pageins", "#{row.pageins} at #{reading.at.to_i}"], ["Nothing", nil]] })
+    broken = Agentmon::DetailSection.new(name: :broken, order: 20, block: ->(_row, _reading) { raise "boom" })
+    row = Agentmon::Metrics::ProcessRows.call(machine(2)[:processes], nil, {}, nil).find { |r| r.pid == 200 }
+    reading = Fixtures.reading(machine(2))
+
+    lines = Detail.lines(row, "claude", now: reading.at, width: 60, reading:, sections: [ok, broken])
+
+    assert_equal "Open files", lines[-4][0, 10]
+    assert_match(/\APageins\s+20 at #{reading.at.to_i}\z/, lines[-3])
+    assert_match(/\ANothing\s+unknown\z/, lines[-2])
+    assert_match(/\Abroken\s+RuntimeError: boom\z/, lines[-1])
+  end
 end

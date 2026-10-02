@@ -60,9 +60,10 @@ can be built at once and merged in any order.
   opens the dashboard (r2ui's `dashboard` helper: full screen on a terminal, one plain frame in a
   pipe); `Agentmon.command` adds subcommands and `Agentmon.cli` root-level DSL.
 
-Sampling cost per tick: one `ps` (~15 ms) and two Fiddle calls per process
-(`proc_pid_rusage`, `proc_pidinfo`; ~25 ms for 700 processes), plus `lsof` (~0.4 s) every 10 s.
-No subprocess per process, ever.
+Sampling cost per tick: one `ps` and two Fiddle calls per process (`proc_pid_rusage` v4,
+`proc_pidinfo(PROC_PIDTASKALLINFO)`): the `processes` probe takes ~50 ms for 800 processes on an
+M-series Mac (~12 ms of it Fiddle), a whole engine tick with every metric ~57 ms; plus `lsof`
+(~0.4 s) every 10 s. No subprocess per process, ever.
 
 ### Files
 
@@ -71,7 +72,7 @@ No subprocess per process, ever.
 | `lib/agentmon.rb` | requires the core, then `Agentmon.load_extensions` | contract PR |
 | `lib/agentmon/model.rb` | every shared Data shape (below) | contract PR |
 | `lib/agentmon/registry.rb` | the extension points and `Registry` | contract PR |
-| `lib/agentmon/{darwin,sampler,reading,engine,store,ui,program}.rb` | core | contract PR |
+| `lib/agentmon/{darwin,sampler,reading,focus,engine,store,ui,program}.rb` | core | contract PR |
 | `lib/agentmon/probes/*.rb` | one probe each | stories |
 | `lib/agentmon/metrics/*.rb` | one metric each | stories |
 | `lib/agentmon/recorders/*.rb` | one recorder each | stories |
@@ -92,7 +93,9 @@ All shapes live in `lib/agentmon/model.rb`. Units everywhere:
 | sizes, cumulative I/O | bytes (Integer) |
 | rates | bytes per second (Float) |
 | CPU time | seconds (Float). The kernel reports Mach ticks (1 ns on Intel, 125/3 ns on Apple Silicon); `Darwin` converts with `mach_timebase_info` and nothing else ever sees a tick, except `start_ticks`, an opaque identity |
-| CPU usage | percent of one core (250.0 = two and a half cores) |
+| CPU usage | percent of one core (250.0 = two and a half cores); `run_wait` (time runnable but waiting for a CPU) too |
+| event counts | Integer, cumulative (pageins, faults, COW faults, context switches); faults, COW faults and context switches are the kernel's 32-bit counters, read unsigned, and rates take the difference modulo 2³² |
+| event rates | events per second (Float): `pagein_rate`, `fault_rate`, ... |
 | instants | epoch seconds (Float); intervals and rates use the monotonic clock |
 | unknown | nil, never 0 (unreadable processes, the first sample's rates) |
 | display | r2ui's `Format`: binary sizes (`1.5G` = 1.5 x 1024³), in the dashboard and the CLI alike |
@@ -100,7 +103,7 @@ All shapes live in `lib/agentmon/model.rb`. Units everywhere:
 | Shape | Produced by | Notes |
 |---|---|---|
 | `Sample` | Sampler | `sample[:processes]`, `sample[:cwd]`, `sample[:memory]` |
-| `ProcessStat` | probe `processes` | `readable: false` (EPERM: other users' processes) keeps ps's rss and %cpu, nil footprint/CPU time/disk. `identity` = `[pid, start_ticks]` survives pid reuse |
+| `ProcessStat` | probe `processes` | `readable: false` (EPERM: other users' processes) keeps ps's rss and %cpu, nil footprint/CPU time/disk/paging. `identity` = `[pid, start_ticks]` survives pid reuse. Paging and scheduling: `wired`, `pageins`, `runnable_time` (rusage) and `faults`, `cow_faults`, `context_switches`, `threads`, `running_threads` (task info); `runnable_time` counts time on a CPU too, so waiting to run = `runnable_time - cpu_time` |
 | `{ pid => path }` | probe `cwd` | lsof, every 10 s |
 | `MemoryStat` | probe `memory` (a01) | counters cumulative since boot, in bytes |
 | `ProcessRates` per pid | metric `process_rates` | deltas only between matching identities |
@@ -109,6 +112,14 @@ All shapes live in `lib/agentmon/model.rb`. Units everywhere:
 | `[ProcessRow]` | metric `process_rows` | what tables show |
 | `MemoryView` | metric `memory` (a02) | Activity Monitor breakdown, rates, pressure trend |
 | `[PressureDriver]` | metric `pressure_drivers` (a03) | sessions ranked by memory push |
+| `[SessionMemory]` | metric `session_memory` (a20) | per-session footprint, resident, wired, share, growth, paging |
+
+**What macOS doesn't give per process without root**: compressed and swapped bytes (they need
+`task_for_pid` and `TASK_VM_INFO`; footprint includes a process's compressed pages but doesn't
+split them out), and I/O wait as such. The closest unprivileged signals are `pagein_rate` (each
+pagein waited for the disk), disk rates, and `run_wait` (waiting for a CPU). Counting threads in
+uninterruptible wait needs one `proc_pidinfo(PROC_PIDTHREADINFO)` per thread (thousands of calls
+per tick), so it's left out.
 
 **Sessions.** A process belongs to its outermost `claude`/`codex` CLI ancestor (itself included);
 with none, to its topmost desktop app ancestor (Claude, ChatGPT/Codex). Claude Code sessions the
@@ -157,11 +168,38 @@ module Agentmon
   panel(:name, row:, order: 100, resource: name, span: 1, title: nil) { |engine| table; view { } }
   command(:name) { summary "..."; option ...; run { ... } }      # r2ui CLI command body
   cli { version Agentmon::VERSION }                              # root-level r2ui CLI DSL
+  detail_section(:name, order: 100) { |row, reading| [["Label", "value"], ...] } # Detail panel lines
 end
 ```
 
 A name already taken in its kind raises (`Agentmon::Error`), so two stories can't silently take
-the same probe, metric, panel or command.
+the same probe, metric, panel, command or detail section.
+
+**Detail sections.** The Detail panel (`ui/process_detail.rb`) shows the selected `ProcessRow`'s
+own lines, then each `detail_section`'s, by `order:` then name. The block gets the row and the
+engine's current reading and returns `[label, value]` pairs (a nil value shows "unknown"); a
+block that raises shows its error on one line instead of breaking the pane.
+
+**Session focus** (`lib/agentmon/focus.rb`). One shared "focused session" lives on the Engine:
+
+```ruby
+engine.focus = session_id         # a Session#id / ProcessRow#session_id; nil clears
+engine.focus                      # the id, or nil
+engine.current                    # while focused: a FocusedReading narrowed to that session
+engine.current(focused: false)    # the whole machine (a session picker, totals)
+engine.focused_session            # the focused Session from the ledger, nil when gone
+reading.focus, reading.unfocused  # the id (nil on a plain Reading), and the whole reading
+Agentmon::Focus.find(sessions, query) # sessions an id, root pid or label substring names
+```
+
+While a session is focused, every per-session value read through `engine.current` is narrowed
+to it: `process_rows`, `process_rates`, `sessions`, `session_ledger`, `pressure_drivers`,
+`session_memory` (`Focus::FILTERS`). Machine-wide values (`memory`) and `reading.sample` pass
+through. So panels and commands that read `engine.current[...]` follow the focus without knowing
+about it; a panel shows the change on its next feed refresh (a story that sets the focus from a
+key refreshes the feeds so the frame updates at once). Recorders and `Engine#errors` always see
+the whole machine. A new per-session shape is a contract change and adds its filter there.
+`agentmon top --session QUERY` uses the same focus.
 
 **The reference parts** (first articles, done here): `probes/processes.rb` (Fiddle rusage with
 Mach tick conversion and EPERM fallback) with `test/probes/processes_test.rb` and
@@ -246,8 +284,20 @@ Done here (first articles): **d00** = the core, probes `processes` and `cwd`, me
 | a17-tree-command | `agentmon tree [SESSION]` | command `tree` | Prints each session's process tree with r2ui `tree` (pid name · footprint · CPU %), the session label as root; an argument (id, root pid or label substring) narrows it to one session; unknown → exit 1 with the list of sessions. run_cli test over the fixture machine. | `lib/agentmon/commands/tree.rb`, `test/commands/tree_test.rb` |
 | a18-cli-options | Version, completion, trace | root keywords `version`, `completion`, `trace_option`, `color_option` | `Agentmon.cli { ... }` adds `agentmon --version` ("agentmon 0.1.0"), `agentmon completion zsh\|bash\|fish`, `--trace` and `--[no-]color` from r2ui's CLI extensions. run_cli tests. | `lib/agentmon/commands/cli_options.rb`, `test/commands/cli_options_test.rb` |
 
+### Sessions, memory and waits
+
+Built on the session focus, `SessionMemory`, and the paging and scheduling fields of
+`ProcessStat`/`ProcessRates`/`ProcessRow` (contract PR "session focus"). The three run in parallel.
+
+| Id | Capability | Reserves | Acceptance criteria | New files |
+|---|---|---|---|---|
+| a19-session-focus | Drill into one session | keys `enter` (only while the Sessions panel has focus; anywhere else it passes on to r2ui's group toggle), `F` (focus the session of the row selected in Processes), `escape` (clear); r2ui extension `agentmon_session_focus`; module `UI::SessionFocus` | Enter on a Sessions row sets `engine.focus` to its id and refreshes every feed, so the same frame shows only that session in Processes, Sessions and the pressure drivers; `F` does the same from a Processes row in a session (a row in none flashes "not in an agent session"); `escape` clears and refreshes. While focused, the status bar says "focus: claude 4242 · repo (esc: all)"; a focused session that has left the ledger clears itself on the next frame. Built only on `engine.focus`/`focused_session` (core): no existing file is edited. Frame tests over `Fixtures.engine(machine(0), machine(2))`: Enter on the Sessions panel (after `focus_panel(app, :session)`) narrows Processes to pids 200–203; escape brings 303 back; Enter on a grouped Processes line still toggles the group; `F` on 303 focuses "claude 303 · web". (`agentmon top --session` is in the core already.) | `lib/agentmon/ui/session_focus.rb`, `test/ui/session_focus_test.rb` |
+| a20-session-memory | Memory by session | metric `session_memory`; module `Metrics::SessionFootprint`; resource and panel `session_memory` (row `:top`, order 30, span 1, title "Memory by session"); module `UI::SessionMemoryPanel`; command `footprint` | `reading[:session_memory]` is `[SessionMemory]`, one per alive session in `reading[:session_ledger]`, largest footprint first: footprint, resident, wired, pageins, pagein and fault rates summed over its live members in `reading[:process_rows]` (each pid once; nil members skipped; a sum with no known member is nil), `peak_footprint` from the ledger, `share` = footprint / `reading[:memory].used` x 100 (nil when memory is nil), `growth_rate` over the last 60 s (metric state per session id, 0.0 until two samples, like a03). Empty list when the ledger is nil. The panel: one row per session (label, footprint with sparkline, share %, resident, growth/s, pageins/s) plus a view line with the machine's compressed and swap used from `reading[:memory]` ("per-process compressed/swap needs root"), blank when memory is nil. `agentmon footprint`: the same as an r2ui table (plain in a pipe), `--json` one object per line in raw units, "No agent sessions running." when empty. Metric tests with preset `session_ledger`/`memory` values over several readings; frame test with preset `session_memory` (`Fixtures.session_memory`), and with none; run_cli tests. Session focus already narrows `session_memory` (core filter): don't register another. | `lib/agentmon/metrics/session_memory.rb`, `test/metrics/session_memory_test.rb`, `lib/agentmon/ui/session_memory.rb`, `test/ui/session_memory_test.rb`, `lib/agentmon/commands/footprint.rb`, `test/commands/footprint_test.rb` |
+| a21-process-waits | What a process waits on | `detail_section :waits` (order 10); `extend_resource(:process)` columns `run_wait`, `pagein_rate` and scope `waiting`; module `UI::ProcessWaits` | The Detail panel gains (via `Agentmon.detail_section`): Threads "12 (1 running)", Waiting for CPU "25.0% now, 3m 2s total" (`run_wait`; total = `runnable_time - cpu_time`), Page-ins "10/s, 20 total", Faults "1000/s (COW 100/s)", Switches "500/s", Wired, Read (`disk_read`); unreadable rows say "not readable without root". The process table gains two compact columns, Wait (`run_wait`, percent) and Pgin/s (`pagein_rate`), and a scope Waiting (`run_wait` > 10 or `pagein_rate` > 0), after a08's. r2ui has no optional (hidden) columns: keep them narrow (fixed width) and report it in the PR body. Frame tests on `machine(0)`/`machine(2)` (claude 200 waits 25% with 10 pageins/s): detail lines and units, columns, the scope; unknown values blank. | `lib/agentmon/ui/process_waits.rb`, `test/ui/process_waits_test.rb` |
+
 Stories never depend on each other's code. Pairs that meet through a shape: a01 → a02 → a03, a04,
 a10, a12, a16 (`MemoryStat`, `MemoryView`, `PressureDriver`); a11 → a14 (store kind `sessions`).
+a19, a20 and a21 meet only through the core (focus, `SessionMemory`, the new `ProcessRow` fields).
 
 ## Follow-ups (not stories yet)
 
@@ -258,3 +308,6 @@ a10, a12, a16 (`MemoryStat`, `MemoryView`, `PressureDriver`); a11 → a14 (store
 - A launchd agent for `agentmon record` (install/uninstall commands).
 - Processes reparented to launchd stop counting toward their session; following them by
   process group would keep them.
+- Per-thread uninterruptible (I/O) wait counts: one `proc_pidinfo(PROC_PIDTHREADINFO)` per thread
+  is too slow per tick; possible for the selected process only (Detail panel), behind a cache.
+- Optional process-table columns (hidden until toggled) need r2ui support.

@@ -19,8 +19,13 @@ class DarwinCoreTest < Minitest::Test
   OFFSETS = {
     ri_user_time: 16, ri_system_time: 24, ri_resident_size: 64, ri_phys_footprint: 72, ri_proc_start_abstime: 80,
     ri_child_user_time: 96, ri_child_system_time: 104, ri_diskio_bytesread: 144, ri_diskio_byteswritten: 152,
-    ri_lifetime_max_phys_footprint: 240
+    ri_lifetime_max_phys_footprint: 240, ri_pageins: 48, ri_wired_size: 56, ri_runnable_time: 288
   }.freeze
+
+  # struct proc_taskallinfo: proc_bsdinfo (136 bytes, start time at 120), then proc_taskinfo:
+  # six uint64s (48 bytes), then int32 pti_policy, pti_faults, pti_pageins, pti_cow_faults, ...
+  TASK_OFFSETS = { pbi_start_tvsec: 120, pbi_start_tvusec: 128, pti_faults: 136 + 52, pti_pageins: 136 + 56,
+                   pti_cow_faults: 136 + 60, pti_csw: 136 + 80, pti_threadnum: 136 + 84, pti_numrunning: 136 + 88 }.freeze
 
   def test_struct_size_is_rusage_info_v4
     assert_equal 296, Agentmon::Darwin::RUSAGE_SIZE # 16 + 35 x 8: ri_user_time .. ri_runnable_time
@@ -57,6 +62,33 @@ class DarwinCoreTest < Minitest::Test
     Agentmon::Darwin.ns_per_tick = 1
 
     assert_in_delta 1.5, Agentmon::Darwin.decode_rusage(fields(user_time: 1_500_000_000)).cpu_time, 1e-9
+  end
+
+  def test_paging_and_runnable_time_at_the_v4_offsets
+    bytes = ("\x00".b * 296)
+    { ri_pageins: 77, ri_wired_size: 4096, ri_runnable_time: 48_000_000 }.each do |field, v|
+      bytes[OFFSETS.fetch(field), 8] = [v].pack("Q<")
+    end
+
+    usage = Agentmon::Darwin.decode_rusage_bytes(bytes)
+
+    assert_equal [77, 4096], [usage.pageins, usage.wired]
+    assert_in_delta 2.0, usage.runnable_time, 1e-9 # Mach ticks x 125/3 ns, like CPU time
+  end
+
+  def test_decodes_task_all_info_at_the_kernel_offsets
+    bytes = ("\x00".b * Agentmon::Darwin::TASKALLINFO_SIZE)
+    bytes[TASK_OFFSETS[:pbi_start_tvsec], 8] = [1_790_000_000].pack("Q<")
+    bytes[TASK_OFFSETS[:pbi_start_tvusec], 8] = [500_000].pack("Q<")
+    { pti_faults: 4_000_000_000, pti_pageins: 9, pti_cow_faults: 3, pti_csw: 1234, pti_threadnum: 12,
+      pti_numrunning: 2 }.each { |field, v| bytes[TASK_OFFSETS.fetch(field), 4] = [v].pack("L<") }
+
+    info = Agentmon::Darwin.decode_task_info_bytes(bytes)
+
+    assert_equal 232, Agentmon::Darwin::TASKALLINFO_SIZE
+    assert_in_delta 1_790_000_000.5, info.started_at
+    assert_equal 4_000_000_000, info.faults # past 2**31: read unsigned, never negative
+    assert_equal [3, 1234, 12, 2], [info.cow_faults, info.context_switches, info.threads, info.running_threads]
   end
 
   def test_sizes_and_io_are_bytes_and_start_is_raw_ticks

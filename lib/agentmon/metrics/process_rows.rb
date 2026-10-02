@@ -20,7 +20,11 @@ module Agentmon
             session: session_id && labels[session_id], session_id:,
             cpu: rate&.cpu, footprint: p.footprint, resident: p.resident, peak_footprint: p.peak_footprint,
             read_rate: rate&.read_rate, write_rate: rate&.write_rate,
-            cpu_time: p.cpu_time, disk_written: p.disk_written, started_at: p.started_at, readable: p.readable
+            cpu_time: p.cpu_time, disk_written: p.disk_written, started_at: p.started_at, readable: p.readable,
+            disk_read: p.disk_read, wired: p.wired, pageins: p.pageins, faults: p.faults, cow_faults: p.cow_faults,
+            context_switches: p.context_switches, runnable_time: p.runnable_time, threads: p.threads,
+            running_threads: p.running_threads, pagein_rate: rate&.pagein_rate, fault_rate: rate&.fault_rate,
+            cow_fault_rate: rate&.cow_fault_rate, context_switch_rate: rate&.context_switch_rate, run_wait: rate&.run_wait
           )
         end
       end

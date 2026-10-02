@@ -16,6 +16,17 @@ class DarwinLiveTest < Minitest::Test
     assert_in_delta Time.now.to_f, Agentmon::Darwin.started_at(Process.pid), 3600
   end
 
+  def test_reads_this_process_task_info
+    info = Agentmon::Darwin.task_info(Process.pid)
+
+    assert info, "own task info should be readable (errno #{Agentmon::Darwin.errno})"
+    assert_in_delta Agentmon::Darwin.started_at(Process.pid), info.started_at, 0.001
+    assert_operator info.faults, :>, 0
+    assert_operator info.threads, :>=, 1
+    assert_operator info.context_switches, :>, 0
+    assert_operator Agentmon::Darwin.rusage(Process.pid).runnable_time, :>=, 0.0
+  end
+
   def test_cpu_time_matches_the_process_clock
     before = Agentmon::Darwin.rusage(Process.pid).cpu_time
     clock_before = Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID)
@@ -33,6 +44,7 @@ class DarwinLiveTest < Minitest::Test
     assert_nil Agentmon::Darwin.rusage(1)
     assert_equal Agentmon::Darwin::EPERM, Agentmon::Darwin.errno
     assert_nil Agentmon::Darwin.started_at(1)
+    assert_nil Agentmon::Darwin.task_info(1)
   end
 
   def test_exited_process_is_nil
@@ -51,6 +63,8 @@ class DarwinLiveTest < Minitest::Test
     assert_operator elapsed, :<, 1.0, "sampling every process took #{elapsed.round(2)}s"
     me = processes.find { |p| p.pid == Process.pid }
     assert me.readable
+    assert_operator me.faults, :>, 0
+    assert_operator me.threads, :>=, 1
     launchd = processes.find { |p| p.pid == 1 }
     assert launchd, "ps lists launchd"
     assert_operator launchd.resident, :>, 0, "unreadable processes keep ps's rss" unless Process.uid.zero?

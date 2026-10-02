@@ -23,7 +23,7 @@ Built by the software-factory job shop: `factory/job-shop.js` (dispatcher), `fac
 
 **Design and story list:** `docs/design.md` (architecture, data model and units, extension points, rules for story work, stories `a01-...`). A story adds only its listed files.
 
-**Shared files** (change only through a small contract PR): `lib/agentmon.rb`, `lib/agentmon/{model,registry,darwin,sampler,reading,engine,store,ui,program}.rb`, `test/test_helper.rb`, `test/support/*.rb`, `exe/agentmon`, `Gemfile`, `Rakefile`, `.github/workflows/ci.yml`, this file, `docs/design.md`.
+**Shared files** (change only through a small contract PR): `lib/agentmon.rb`, `lib/agentmon/{model,registry,darwin,sampler,reading,focus,engine,store,ui,program}.rb`, `test/test_helper.rb`, `test/support/*.rb`, `exe/agentmon`, `Gemfile`, `Rakefile`, `.github/workflows/ci.yml`, this file, `docs/design.md`.
 
 `r2ui-feedback.md` collects what was awkward, missing or buggy in r2ui while building agentmon. Stories don't edit it (it would conflict): put r2ui feedback, with file and line, in your PR body and result; the plant manager folds it in.
 

@@ -44,6 +44,13 @@ module Agentmon
       @values[name] = compute(metric)
     end
 
+    # The focused session id: always nil here; a FocusedReading (lib/agentmon/focus.rb) answers
+    # its session. Code that may get either calls these instead of checking the class.
+    def focus = nil
+
+    # The whole machine's reading (a FocusedReading returns the one it narrows).
+    def unfocused = self
+
     # True when a metric of that name is registered (or preset).
     def key?(name) = @values.key?(name.to_sym) || @metrics.key?(name.to_sym)
 
