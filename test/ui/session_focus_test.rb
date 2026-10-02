@@ -69,10 +69,24 @@ class SessionFocusTest < Minitest::Test
   def test_escape_while_unfocused_passes_on
     with_engine(engine) do |e|
       a = app
-      a.press(:escape)
+      panel = a.dashboard.panels.find { |p| p.name == :process }
+      a.press("/", "x")
+
+      assert_equal "x", a.panel_state(panel).search
+      a.press(:escape) # reaches r2ui's search, which clears it
 
       assert_nil e.focus
+      assert_equal "", a.panel_state(panel).search
     end
+  end
+
+  def test_a_reading_without_a_ledger_keeps_the_focus
+    fake = Struct.new(:focus) do
+      def current(focused: true) = { session_ledger: nil }
+    end.new("claude-200-1")
+
+    refute Agentmon::UI::SessionFocus.clear_if_gone(nil, fake)
+    assert_equal "claude-200-1", fake.focus
   end
 
   def test_enter_on_a_processes_group_still_toggles_it

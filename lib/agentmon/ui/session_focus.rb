@@ -57,9 +57,12 @@ module Agentmon
         session && "focus: #{session.label} (esc: all)"
       end
 
-      # Clears a focus whose session has left the ledger (and refreshes). True when it did.
+      # Clears a focus whose session has left the ledger (and refreshes). True when it did. A
+      # reading without a ledger (that metric failed this sample) keeps the focus.
       def clear_if_gone(app, engine)
-        return false if engine.focus.nil? || engine.focused_session
+        id = engine.focus or return false
+        ledger = engine.current(focused: false)[:session_ledger]
+        return false if ledger.nil? || ledger.any? { |s| s.id == id }
 
         focus!(app, engine, nil)
         true
