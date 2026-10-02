@@ -111,4 +111,15 @@ class FootprintCommandTest < Minitest::Test
     assert result.success?, result.err
     assert_equal "No agent sessions running.\n", result.out
   end
+
+  def test_without_process_rows_the_sessions_are_still_listed
+    registry = Agentmon::Registry.new
+    Agentmon.registry.metrics.reject { |m| m.name == :process_rows }.each { |m| registry.add(:metric, m) }
+    registry.add(:metric, Agentmon::Metric.new(name: :process_rows, block: ->(_r, _s) {}))
+    result = footprint(engine: Agentmon::Engine.new(sampler: Sampler.new(machine(0), machine(2)), registry:, prime_gap: 0))
+
+    assert result.success?, result.err
+    refute_includes result.out, "No agent sessions running."
+    assert_includes result.out, "claude 200 · repo"
+  end
 end

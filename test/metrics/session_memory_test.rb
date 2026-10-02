@@ -106,9 +106,30 @@ class SessionMemoryMetricTest < Minitest::Test
     assert_nil m.resident
   end
 
-  def test_without_process_rows_it_is_not_available
-    assert_nil memories([0, [session("a")], nil, nil])
+  def test_without_process_rows_each_alive_session_has_nil_sums
+    list = memories([0, [session("a")], nil, nil])
+    assert_equal %w[a], list.map(&:session_id)
+    assert_nil list.first.footprint
+    assert_nil list.first.growth_rate
     assert_equal [], memories([0, [], nil, nil])
+  end
+
+  def test_an_unknown_footprint_is_not_recorded_as_zero
+    unknown = [2, [session("a")], [row(1, "a", footprint: nil)], nil]
+
+    assert_nil memories(step(0, 100 * MB), unknown).first.growth_rate
+    assert_in_delta 5.0 * MB, memories(step(0, 100 * MB), unknown, step(4, 120 * MB)).first.growth_rate
+  end
+
+  def test_growth_restarts_when_the_readable_members_change
+    two = ->(t, second) { [t, [session("a")], [row(1, "a", footprint: 100 * MB), row(2, "a", footprint: second)], nil] }
+
+    # pid 2 turns unreadable, then readable again: neither change is growth.
+    assert_in_delta 0.0, memories(two.(0, 500 * MB), two.(2, nil)).first.growth_rate
+    assert_in_delta 0.0, memories(two.(0, 500 * MB), two.(2, nil), two.(4, 500 * MB)).first.growth_rate
+    # pid 2 joins: the window restarts with it.
+    assert_in_delta 0.0, memories(step(0, 100 * MB), two.(2, 500 * MB)).first.growth_rate
+    assert_in_delta 1.0 * MB, memories(step(0, 100 * MB), two.(2, 500 * MB), two.(4, 502 * MB)).first.growth_rate
   end
 
   def test_share_is_nil_while_memory_is_unknown

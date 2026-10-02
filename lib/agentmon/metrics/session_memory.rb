@@ -16,11 +16,14 @@
 # - share: footprint as a percent of used memory (reading[:memory].used); nil while memory is
 #   unknown.
 # - growth_rate: footprint change in bytes per second over the last WINDOW seconds of samples, on
-#   the monotonic clock; 0.0 until a session has two samples (as pressure_drivers does).
+#   the monotonic clock; 0.0 until a session has two samples (as pressure_drivers does), nil while
+#   its footprint is unknown. Only samples with the same readable members (pids with a known
+#   footprint) are compared, so a member joining, leaving or turning unreadable restarts the
+#   window rather than showing as growth.
 #
 # Compressed and swapped bytes per process need task_for_pid (root), so they aren't here; the
-# machine's are in reading[:memory]. Empty when the ledger is nil; nil (not available) when there
-# are sessions but reading[:process_rows] is nil, since no member is known. Stateful: a short
+# machine's are in reading[:memory]. Empty when the ledger is nil; when reading[:process_rows] is
+# nil, one record per alive session with nil sums, since no member is known. Stateful: a short
 # footprint history per session id, dropped when the session is no longer alive.
 module Agentmon
   module Metrics
@@ -33,10 +36,7 @@ module Agentmon
         history = (@state[:history] ||= {}) # session id => [[mono, footprint], ...], oldest first
         alive = (reading[:session_ledger] || []).select(&:alive?)
         history.select! { |id, _| alive.any? { |s| s.id == id } }
-        rows = reading[:process_rows]
-        return nil if rows.nil? && !alive.empty? # no members known: not available (the rows' error is shown)
-
-        members = (rows || []).uniq(&:pid).group_by(&:session_id)
+        members = (reading[:process_rows] || []).uniq(&:pid).group_by(&:session_id)
         used = reading[:memory]&.used
         mono = reading.sample.mono
 
@@ -47,7 +47,7 @@ module Agentmon
             session_id: session.id, label: session.label, processes: rows.size, footprint:,
             resident: sum(rows, :resident), wired: sum(rows, :wired), peak_footprint: session.peak_footprint,
             share: footprint && used&.positive? ? footprint * 100.0 / used : nil,
-            growth_rate: growth(history[session.id] ||= [], mono, footprint || 0),
+            growth_rate: growth(history[session.id] ||= [], mono, footprint, readable(rows)),
             pageins: sum(rows, :pageins), pagein_rate: sum(rows, :pagein_rate), fault_rate: sum(rows, :fault_rate)
           )
         end.sort_by { |m| [-(m.footprint || 0), m.session_id] }
@@ -61,13 +61,20 @@ module Agentmon
         known.empty? ? nil : known.sum
       end
 
-      # Adds this sample to a session's points, forgets those older than WINDOW and returns the
-      # rate from the oldest left to this one.
-      def growth(points, mono, footprint)
+      # The pids whose footprint is known, sorted.
+      def readable(rows) = rows.reject { |r| r.footprint.nil? }.map(&:pid).sort
+
+      # Adds this sample to a session's points, forgets those older than WINDOW or with other
+      # readable members, and returns the rate from the oldest left to this one; nil (and nothing
+      # recorded) while the footprint is unknown.
+      def growth(points, mono, footprint, pids)
+        return nil if footprint.nil?
+
         points.pop if points.last && points.last[0] >= mono # the same sample seen again
-        points << [mono, footprint]
+        points.clear if points.last && points.last[2] != pids # members changed: restart the window
+        points << [mono, footprint, pids]
         points.shift while mono - points.first[0] > WINDOW
-        since, was = points.first
+        since, was, = points.first
         mono > since ? (footprint - was) / (mono - since) : 0.0
       end
     end
