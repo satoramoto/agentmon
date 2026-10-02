@@ -16,6 +16,16 @@ class RegistryCoreTest < Minitest::Test
     assert_raises(Agentmon::Error) { @registry.add(:command, Agentmon::Command.new(name: :top, block: proc {})) }
   end
 
+  def test_detail_sections_sort_by_order_then_name_and_names_are_unique
+    section = ->(name, order) { Agentmon::DetailSection.new(name:, order:, block: proc { [] }) }
+    @registry.add(:detail_section, section[:b, 10])
+    @registry.add(:detail_section, section[:z, 5])
+    @registry.add(:detail_section, section[:a, 10])
+
+    assert_equal %i[z a b], @registry.detail_sections.map(&:name)
+    assert_raises(Agentmon::Error) { @registry.add(:detail_section, section[:a, 1]) }
+  end
+
   def test_layout_orders_rows_and_panels_and_drops_empty_rows
     @registry.add(:row, Agentmon::Row.new(name: :main, order: 100, height: nil))
     @registry.add(:row, Agentmon::Row.new(name: :top, order: 10, height: 14))

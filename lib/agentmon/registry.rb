@@ -24,11 +24,15 @@ module Agentmon
   Panel = Data.define(:name, :row, :order, :resource, :span, :title, :options, :block)
   # A CLI command: the block is an r2ui CLI command body (summary, option, run, ...).
   Command = Data.define(:name, :block)
+  # Lines a story adds to the Detail panel (ui/process_detail.rb) under the selected process's
+  # own: the block gets the ProcessRow and the Engine's current Reading and returns
+  # `[[label, value], ...]` (value a String; nil shows "unknown"), or [] to add nothing.
+  DetailSection = Data.define(:name, :order, :block)
 
   # Everything the extension files registered. One per process (Agentmon.registry); tests build
   # their own to try a registration in isolation.
   class Registry
-    KINDS = %i[probe metric recorder row panel command].freeze
+    KINDS = %i[probe metric recorder row panel command detail_section].freeze
 
     def initialize
       @items = KINDS.to_h { |k| [k, {}] }
@@ -57,6 +61,9 @@ module Agentmon
     def metrics = all(:metric)
     def recorders = all(:recorder)
     def commands = all(:command)
+
+    # Detail panel sections in order (then by name).
+    def detail_sections = all(:detail_section).sort_by { |s| [s.order, s.name.to_s] }
 
     # Rows in order, each with its panels in order; empty rows left out.
     def layout
@@ -119,6 +126,11 @@ module Agentmon
 
     # An `agentmon <name>` command; the block is an r2ui CLI command body.
     def command(name, &block) = registry.add(:command, Command.new(name: name.to_sym, block: need(block)))
+
+    # More lines in the Detail panel for the selected process: `{ |row, reading| [[label, value]] }`.
+    def detail_section(name, order: 100, &block)
+      registry.add(:detail_section, DetailSection.new(name: name.to_sym, order:, block: need(block)))
+    end
 
     # Root-level r2ui CLI DSL (version, completion, global flags), run on the root builder.
     def cli(&block) = registry.cli_blocks << need(block)

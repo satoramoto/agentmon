@@ -33,8 +33,10 @@ module Agentmon
       @run_id = "#{Process.pid}-#{clock.now.to_i}"
     end
 
-    # The latest Reading, sampling first if it's older than `max_age` seconds.
-    def current(max_age: interval * 0.75)
+    # The latest Reading, sampling first if it's older than `max_age` seconds. While a session is
+    # focused it is a FocusedReading narrowed to it (lib/agentmon/focus.rb); `focused: false`
+    # returns the whole machine regardless.
+    def current(max_age: interval * 0.75, focused: true)
       @lock.synchronize do
         if @reading.nil?
           tick!
@@ -43,8 +45,24 @@ module Agentmon
         elsif @clock.mono - @ticked_at >= max_age
           tick!
         end
-        @reading
+        focused ? focused_reading : @reading
       end
+    end
+
+    # The focused session's id (Session#id / ProcessRow#session_id), nil when unfocused.
+    def focus = @focus
+
+    # Focuses every reader of `current` on one session; nil clears. Takes effect on each panel's
+    # next feed refresh. Recorders and `errors` always see the whole machine.
+    def focus=(session_id)
+      @lock.synchronize { @focus = session_id }
+    end
+
+    # The focused Session from the ledger (alive or recently ended), or nil when nothing is
+    # focused or the session has left the ledger.
+    def focused_session
+      id = focus or return nil
+      current(focused: false)[:session_ledger]&.find { |s| s.id == id }
     end
 
     # Samples now (callers hold no lock: use `current` from threads).
@@ -70,6 +88,14 @@ module Agentmon
     end
 
     private
+
+    # The latest reading narrowed to the focus, built once per (reading, focus) under the lock.
+    def focused_reading
+      return @reading unless @focus
+
+      @focused = nil unless @focused&.unfocused.equal?(@reading) && @focused.focus == @focus
+      @focused ||= Focus.apply(@reading, @focus)
+    end
 
     def record(reading)
       @registry.recorders.each do |recorder|

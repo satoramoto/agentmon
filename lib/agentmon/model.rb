@@ -38,14 +38,42 @@ module Agentmon
     :peak_footprint,  # lifetime max footprint, bytes
     :disk_read,       # cumulative bytes
     :disk_written,    # cumulative bytes
-    :ps_cpu           # ps %cpu (a decaying average): the fallback when rusage is unreadable
+    :ps_cpu,          # ps %cpu (a decaying average): the fallback when rusage is unreadable
+    # Paging and scheduling, from the same two calls per process (rusage, PROC_PIDTASKALLINFO).
+    # nil when unreadable. Counts are cumulative event counts (Integer), not bytes.
+    :wired,           # wired (unpageable) bytes now
+    :pageins,         # count of faults that had to read a page from disk (rusage ri_pageins)
+    :faults,          # count of page faults of any kind (pti_faults: a 32-bit kernel counter, wraps)
+    :cow_faults,      # count of copy-on-write faults (pti_cow_faults: 32-bit, wraps)
+    :context_switches, # count (pti_csw: 32-bit, wraps)
+    :runnable_time,   # seconds its threads were runnable: on a CPU *or waiting for one*
+                      # (ri_runnable_time). Time spent waiting to run = runnable_time - cpu_time
+    :threads,         # threads now
+    :running_threads  # threads running now
   ) do
+    # The paging and scheduling fields default to nil (unknown), so code written before they
+    # existed, and fixtures that don't care, still build ProcessStats.
+    def initialize(wired: nil, pageins: nil, faults: nil, cow_faults: nil, context_switches: nil, runnable_time: nil,
+                   threads: nil, running_threads: nil, **) = super
+
     def identity = [pid, start_ticks]
   end
 
   # metrics/process_rates.rb output, per pid: rates between the previous sample and this one.
-  # A process seen for the first time (or unreadable) has ps's %cpu and nil disk rates.
-  ProcessRates = Data.define(:cpu, :read_rate, :write_rate)
+  # A process seen for the first time (or unreadable) has ps's %cpu and nil for every other rate.
+  ProcessRates = Data.define(
+    :cpu,                    # percent of one core
+    :read_rate, :write_rate, # disk bytes/s
+    :pagein_rate,            # pageins/s: each one waited for the disk (the closest thing to I/O wait)
+    :fault_rate,             # page faults/s
+    :cow_fault_rate,         # copy-on-write faults/s
+    :context_switch_rate,    # context switches/s
+    :run_wait                # percent of one core spent runnable but not running, i.e. waiting for
+                             # a CPU: (Δrunnable_time - Δcpu_time) / interval x 100
+  ) do
+    def initialize(pagein_rate: nil, fault_rate: nil, cow_fault_rate: nil, context_switch_rate: nil, run_wait: nil,
+                   **) = super
+  end
 
   # metrics/sessions.rb: who an agent session is. `kind` is :cli (an outermost claude/codex CLI
   # process) or :app (a desktop app and all its helpers). `id` is stable across agentmon runs:
@@ -93,8 +121,21 @@ module Agentmon
     :footprint, :resident, :peak_footprint,  # bytes
     :read_rate, :write_rate,                 # bytes/s, nil until two samples
     :cpu_time, :disk_written,                # seconds, bytes (cumulative)
-    :started_at, :readable
-  )
+    :started_at, :readable,
+    # Paging and scheduling (from ProcessStat and ProcessRates); nil when unreadable or before two
+    # samples. Optional, so rows built without them still work.
+    :disk_read,                              # bytes (cumulative)
+    :wired,                                  # bytes now
+    :pageins, :faults, :cow_faults, :context_switches, # counts (cumulative)
+    :runnable_time,                          # seconds (cumulative), time on a CPU included
+    :threads, :running_threads,              # counts now
+    :pagein_rate, :fault_rate, :cow_fault_rate, :context_switch_rate, # per second
+    :run_wait                                # percent of one core spent waiting for a CPU
+  ) do
+    def initialize(disk_read: nil, wired: nil, pageins: nil, faults: nil, cow_faults: nil, context_switches: nil,
+                   runnable_time: nil, threads: nil, running_threads: nil, pagein_rate: nil, fault_rate: nil,
+                   cow_fault_rate: nil, context_switch_rate: nil, run_wait: nil, **) = super
+  end
 
   # probes/memory.rb (story a01): the machine's memory counters. Sizes in bytes; the counters
   # (swapins .. pageins) are cumulative bytes since boot (pages x page size).
@@ -127,5 +168,22 @@ module Agentmon
     :footprint,     # bytes now
     :share,         # percent of used memory
     :growth_rate    # bytes/s of footprint change over the last minute
+  )
+
+  # metrics/session_memory.rb (story a20): one alive session's memory, largest footprint first.
+  # Sums over the session's live readable members, each process once. Compressed and swapped
+  # bytes per process need task_for_pid (root), so they aren't here; MemoryView has the machine's.
+  SessionMemory = Data.define(
+    :session_id, :label,
+    :processes,       # live members
+    :footprint,       # bytes now (Activity Monitor's Memory; includes the session's compressed pages)
+    :resident,        # bytes now
+    :wired,           # bytes now
+    :peak_footprint,  # bytes: largest footprint sum over its life (Session#peak_footprint)
+    :share,           # percent of MemoryView#used (nil while memory is unknown)
+    :growth_rate,     # bytes/s of footprint change over the last minute (0.0 until two samples)
+    :pageins,         # count, cumulative over live members
+    :pagein_rate,     # pageins/s now (nil until two samples)
+    :fault_rate       # page faults/s now (nil until two samples)
   )
 end

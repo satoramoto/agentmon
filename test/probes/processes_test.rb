@@ -15,10 +15,19 @@ class ProcessesProbeTest < Minitest::Test
       return nil if pid == 1
 
       Agentmon::Darwin::Rusage.new(cpu_time: 2.5, child_cpu_time: 0.5, resident: 300 * 1024, footprint: 200 * 1024,
-                                   peak_footprint: 250 * 1024, disk_read: 7, disk_written: 9, start_ticks: pid * 10)
+                                   peak_footprint: 250 * 1024, disk_read: 7, disk_written: 9, start_ticks: pid * 10,
+                                   wired: 4096, pageins: 11, runnable_time: 3.0)
     end
 
-    def started_at(pid) = 1_790_000_000.0 + pid
+    # The Claude Helper's task info fails (as if it exited between the two calls).
+    def task_info(pid)
+      return nil if pid == 59_351
+
+      Agentmon::Darwin::TaskInfo.new(started_at: 1_790_000_000.0 + pid, faults: 100, cow_faults: 5,
+                                     context_switches: 70, threads: 4, running_threads: 1)
+    end
+
+    def started_at(pid) = 1_700_000_000.0 + pid
   end
 
   def processes = Agentmon::Probes::Processes.read(ps_text: PS, reader: Reader.new)
@@ -38,6 +47,24 @@ class ProcessesProbeTest < Minitest::Test
     assert_in_delta 1_790_059_334.0, claude.started_at
   end
 
+  def test_paging_and_scheduling_come_from_rusage_and_task_info
+    claude = processes[1]
+
+    assert_equal [4096, 11, 100, 5, 70, 4, 1], [claude.wired, claude.pageins, claude.faults, claude.cow_faults,
+                                                 claude.context_switches, claude.threads, claude.running_threads]
+    assert_in_delta 3.0, claude.runnable_time
+  end
+
+  def test_task_info_failure_keeps_rusage_and_reads_the_start_time_alone
+    helper = processes.last
+
+    assert helper.readable
+    assert_in_delta 1_700_059_351.0, helper.started_at
+    assert_equal 11, helper.pageins
+    assert_nil helper.faults
+    assert_nil helper.threads
+  end
+
   def test_unreadable_processes_fall_back_to_ps_in_bytes
     launchd = processes.first
 
@@ -46,6 +73,9 @@ class ProcessesProbeTest < Minitest::Test
     assert_nil launchd.footprint
     assert_nil launchd.cpu_time
     assert_nil launchd.disk_written
+    assert_nil launchd.pageins
+    assert_nil launchd.faults
+    assert_nil launchd.runnable_time
     assert_in_delta 0.0, launchd.ps_cpu
   end
 
