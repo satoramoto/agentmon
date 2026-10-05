@@ -19,6 +19,8 @@ module Agentmon
     #                                                   # => "busy ▕███▊     ▏ 42%"
     #   meter(label: "busy", text: nil, fraction: nil, width: 16)
     #                                                   # => "busy ▕       ▏ –"
+    #   stacked_meter(label: "RAM", text: "1G", part: 0.25, fraction: 0.5, width: 16)
+    #                                                   # => "RAM ▕█▊█▌   ▏ 1G" (█▊ accent, █▌ dim)
     #   spark(label: "cpu", values: [1, 2, 3, 4], text: "4%", width: 12)
     #                                                   # => "cpu ⠀⠀⠀⣠⣾ 4%"
     #   trend(label: "CPU", text: "42%", values: [1, 2, 3, 4], width: 10, height: 1)
@@ -110,8 +112,75 @@ module Agentmon
 
         fraction = known ? fraction.to_f.clamp(0.0, 1.0) : 0.0
         bar_sgr ||= known ? G.heat(fraction) : G.fg(DIM)
-        line = pad(cut(label, label_w), label_w) + " " + G.paint("▕", G.fg(DIM)) +
-               G.paint(G.bar(fraction, bw), "#{bar_sgr};#{G.bg(TROUGH)}") + G.paint("▏", G.fg(DIM)) +
+        meter_line(label, label_w, G.paint(G.bar(fraction, bw), "#{bar_sgr};#{G.bg(TROUGH)}"), text, text_sgr,
+                   text_w, width)
+      end
+
+      # A meter whose bar stacks a part of the whole: `label ▕PPrrr   ▏ text`, from the left `part`
+      # (0..1 of the whole) in `part_hex`, the rest of `fraction` in `rest_hex`, the trough after
+      # (stacked_bar). Unknown part, fraction or text draws as an unknown meter.
+      #
+      #   stacked_meter(label: "RAM", text: "1G 6% · 9G/16G", part: 0.25, fraction: 0.5, width: 30)
+      #                                                   # => "RAM ▕██▎█▌    ▏ 1G 6% · 9G/16G" (plain)
+      def stacked_meter(label:, text:, part:, fraction:, width:, label_width: nil, text_width: nil,
+                        part_hex: ACCENT, rest_hex: DIM, text_sgr: nil)
+        return "" if width <= 0
+        if part.nil? || fraction.nil? || text.nil?
+          return meter(label:, text: nil, fraction: nil, width:, label_width:, text_width:)
+        end
+
+        label = label.to_s
+        text = text.to_s
+        label_w = label_width || visible_width(label)
+        text_w = text_width || visible_width(text)
+        bw = width - label_w - text_w - 4
+        return sides(label, nil, text, text_sgr, width) if bw < 3
+
+        meter_line(label, label_w, stacked_bar(part, fraction, bw, part_hex:, rest_hex:), text, text_sgr, text_w,
+                   width)
+      end
+
+      # `width` cells: `part` then the rest of `fraction` (both 0..1 of the whole; part is clamped to
+      # fraction) then the trough. Eighth-block precise: a boundary cell draws a left partial block
+      # (▏..▉) in the left segment's colour over the right segment's colour as its background. A
+      # part above zero shows at least one eighth. When both boundaries fall in one cell the part
+      # keeps its eighths and the cell's background is whichever of rest or trough covers more of it.
+      def stacked_bar(part, fraction, width, part_hex: ACCENT, rest_hex: DIM)
+        return "" if width <= 0
+
+        whole = fraction.to_f.clamp(0.0, 1.0)
+        part = part.to_f.clamp(0.0, whole)
+        used_e = (whole * width * 8).round
+        part_e = (part * width * 8).round
+        part_e = 1 if part_e.zero? && part.positive?
+        used_e = part_e if used_e < part_e
+        runs = []
+        width.times do |i|
+          glyph, fg, bg = stacked_cell((part_e - (8 * i)).clamp(0, 8), (used_e - (8 * i)).clamp(0, 8),
+                                       part_hex, rest_hex)
+          sgr = [fg && G.fg(fg), G.bg(bg)].compact.join(";")
+          if runs.last && runs.last[1] == sgr
+            runs.last[0] << glyph
+          else
+            runs << [+glyph, sgr]
+          end
+        end
+        runs.map { |glyphs, sgr| G.paint(glyphs, sgr) }.join
+      end
+
+      # One stacked_bar cell with `a` eighths of part and `b` eighths of part + rest: [glyph, fg, bg].
+      def stacked_cell(a, b, part_hex, rest_hex)
+        if a == 8 then ["█", part_hex, TROUGH]
+        elsif a.positive? then [G::PARTIAL[a - 1], part_hex, b - a > 8 - b ? rest_hex : TROUGH]
+        elsif b == 8 then ["█", rest_hex, TROUGH]
+        elsif b.positive? then [G::PARTIAL[b - 1], rest_hex, TROUGH]
+        else [" ", nil, TROUGH]
+        end
+      end
+
+      # `label ▕bar▏ text` with the label and text padded to their widths, fitted to `width`.
+      def meter_line(label, label_w, bar, text, text_sgr, text_w, width)
+        line = pad(cut(label, label_w), label_w) + " " + G.paint("▕", G.fg(DIM)) + bar + G.paint("▏", G.fg(DIM)) +
                " " + pad(G.paint(text, text_sgr), text_w, align: :right)
         fit(line, width)
       end

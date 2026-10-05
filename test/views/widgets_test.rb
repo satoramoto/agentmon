@@ -117,6 +117,68 @@ class WidgetsViewTest < Minitest::Test
     assert_equal "42%", plain(W.meter(label: "busy", text: "42%", fraction: 0.42, width: 3))
   end
 
+  # --- stacked meter ---
+
+  def test_stacked_bar_segments_in_eighths
+    # 7 cells = 56 eighths: part 14 (█ + ▊ over the rest), used 28 (█▌ rest), then 3 trough cells.
+    bar = W.stacked_bar(0.25, 0.5, 7)
+
+    assert_equal "█▊█▌   ", plain(bar)
+    accent = G.fg(W::ACCENT)
+    dim = G.fg(W::DIM)
+    assert_equal [G.paint("█", "#{accent};#{G.bg(W::TROUGH)}"), G.paint("▊", "#{accent};#{G.bg(W::DIM)}"),
+                  G.paint("█▌", "#{dim};#{G.bg(W::TROUGH)}"), G.paint("   ", G.bg(W::TROUGH))].join, bar
+  end
+
+  def test_stacked_bar_order_part_then_rest_then_trough
+    bar = W.stacked_bar(0.5, 0.75, 8)
+    accent_at = bar.index(G.fg(W::ACCENT))
+    dim_at = bar.index("#{G.fg(W::DIM)};")
+
+    assert_equal "██████  ", plain(bar)
+    assert_operator accent_at, :<, dim_at
+    assert bar.end_with?(G.paint("  ", G.bg(W::TROUGH)))
+  end
+
+  def test_stacked_bar_clamps_and_keeps_a_tiny_part_visible
+    assert_equal " " * 10, plain(W.stacked_bar(0.0001, 0.0, 10)) # the part is clamped to the whole
+    assert_includes W.stacked_bar(0.0001, 0.5, 10), G.paint("▏", "#{G.fg(W::ACCENT)};#{G.bg(W::DIM)}")
+    assert_equal "█" * 4, plain(W.stacked_bar(0.9, 0.5, 8))[0, 4] # part clamped to used
+    assert_equal " " * 4, plain(W.stacked_bar(0.9, 0.5, 8))[4, 4]
+    assert_equal "█" * 5, plain(W.stacked_bar(2.0, 2.0, 5))
+    refute_includes W.stacked_bar(0.0, 0.5, 4), G.fg(W::ACCENT)
+  end
+
+  def test_stacked_meter_line
+    line = W.stacked_meter(label: "RAM", text: "1G 6% · 9G/16G", part: 0.25, fraction: 0.5, width: 30,
+                           text_sgr: G.fg(W::ACCENT))
+
+    assert_equal "RAM ▕██▎█▌    ▏ 1G 6% · 9G/16G", plain(line)
+    assert_includes line, G.paint("1G 6% · 9G/16G", G.fg(W::ACCENT))
+    assert_width 30, line
+  end
+
+  def test_stacked_meter_unknown
+    [[nil, 0.5, "x"], [0.1, nil, "x"], [0.1, 0.5, nil]].each do |part, fraction, text|
+      line = W.stacked_meter(label: "RAM", text:, part:, fraction:, width: 15)
+
+      assert_equal "RAM ▕       ▏ –", plain(line)
+      refute_includes line, G.fg(W::ACCENT)
+    end
+  end
+
+  def test_stacked_meter_fits_every_width
+    (0..50).each do |w|
+      line = W.stacked_meter(label: "RAM", text: "387M 1% · 24G/32G", part: 0.01, fraction: 0.75, width: w,
+                             label_width: 8)
+
+      assert_width w, line
+      refute_includes line, "\n"
+    end
+    assert_equal "RAM 387M 1% · 24G/32G", plain(W.stacked_meter(label: "RAM", text: "387M 1% · 24G/32G",
+                                                                    part: 0.01, fraction: 0.75, width: 21))
+  end
+
   # --- spark ---
 
   def test_spark_exact

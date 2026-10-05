@@ -69,6 +69,23 @@ class VisualViewTest < Minitest::Test
     end
   end
 
+  # The drilled-in Memory panel: the machine's RAM with the session's footprint as a slice, then
+  # pressure as a meter.
+  def test_drilled_in_memory_shows_the_machine_with_the_session_slice
+    with_engine(Fixtures.engine(*samples)) do
+      app = dashboard_app(view: :visual, focus: nil)
+      frame_of(app)
+      app.press(:enter)
+      lines = frame_of(app).split("\n").first(11)
+      ram = lines.find { |l| l.include?("RAM ") }
+
+      refute_nil ram, lines.join("\n")
+      assert_match(%r{RAM\s+▕.{10,}▏ \d[\d.]*[KMG] (<1|\d+)% · 9\.0G/16G│}, ram)
+      assert_match(/pressure ▕[^▏]+▏\s+30\.0%│/, lines.find { |l| l.include?("pressure") })
+      refute_includes lines.join, "footprint ▕"
+    end
+  end
+
   def test_no_line_is_wider_than_the_window
     with_engine(Fixtures.engine(*samples)) do
       text = frame_of(dashboard_app(view: :visual, focus: nil))

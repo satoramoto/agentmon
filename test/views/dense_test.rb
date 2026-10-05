@@ -89,6 +89,22 @@ class DenseViewTest < Minitest::Test
     end
   end
 
+  # The drilled-in Memory panel shows the machine's RAM (used of total) with the session's
+  # footprint as a slice, and pressure, not the footprint as a share of used memory.
+  def test_drilled_in_memory_shows_the_machine_with_the_session_slice
+    with_app do |app|
+      view_frame(app)
+      app.press(:enter)
+      lines = view_frame(app).split("\n")
+      ram = lines.find { |l| l.include?("RAM ▕") }
+
+      refute_nil ram, lines.first(7).join("\n")
+      assert_match(%r{RAM ▕.{6,}▏ \d[\d.]*[KMG] (<1|\d+)% · 9\.0G/16G│}, ram)
+      assert_match(/pressure\s+30\.0%/, lines[0, 7].find { |l| l.include?("pressure") })
+      refute_includes lines.first(7).join, "footprint ▕"
+    end
+  end
+
   def test_fits_other_window_sizes
     with_app do |app|
       [[120, 40], [200, 50]].each do |w, h|

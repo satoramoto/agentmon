@@ -51,7 +51,10 @@ module Agentmon
     PanelDef = Data.define(:name, :title, :span, :resource, :items, :options)
     UseDef = Data.define(:name, :span, :title)
 
-    Meter = Data.define(:signal, :heat)
+    # `part`: a Signal stacked into the bar from the left (a share of the meter's whole), or nil.
+    Meter = Data.define(:signal, :heat, :part) do
+      def initialize(signal:, heat:, part: nil) = super
+    end
     Trend = Data.define(:signals, :height)
     Spark = Data.define(:signal)
     Stat = Data.define(:signals, :columns)
@@ -179,8 +182,14 @@ module Agentmon
 
       def initialize = @items = []
 
-      def meter(sig, of: nil, max: nil, label: nil, unit: nil, heat: true)
-        @items << Meter.new(signal: Views.signal(sig, of:, max:, label:, unit:), heat:)
+      # `part:` stacks another signal into the bar: `meter "memory.used", part: "focus.footprint"`
+      # draws the part from the left in the accent, the rest of used dim, free memory empty, and
+      # the text "part share · used/total" (the share is of the total). Needs a total (`of:`).
+      def meter(sig, of: nil, max: nil, label: nil, unit: nil, heat: true, part: nil)
+        signal = Views.signal(sig, of:, max:, label:, unit:)
+        raise ArgumentError, "meter #{sig} part: needs a total (of:)" if part && signal.of.nil?
+
+        @items << Meter.new(signal:, heat:, part: part && Views.signal(part))
       end
 
       # Several signals stack, sharing `height` chart lines (nil: the rest of the panel; a Float
@@ -291,6 +300,24 @@ module Agentmon
         "#{text(signal, value)} / #{text(signal, total)} #{(value * 100.0 / total).round}%"
       end
 
+      # A stacked meter's fractions of the total and text, e.g. [0.02, 0.56, "387M 1% · 9.0G/16G"]:
+      # the part (clamped to the whole's value), the whole's value, then "part share · value/total"
+      # (share of the total, "<1%" below one percent). Any of them unknown: [nil, nil, nil].
+      def stacked(item, reading)
+        sig = item.signal
+        used = Signals.value(sig, reading)
+        total = Signals.total(sig, reading)
+        part = Signals.value(item.part, reading)
+        return [nil, nil, nil] if used.nil? || part.nil? || !total&.positive?
+
+        share = part * 100.0 / total
+        pct = share.positive? && share < 0.5 ? "<1%" : "#{share.round}%"
+        text = "#{text(item.part, part)} #{pct} · #{text(sig, used)}/#{text(sig, total)}"
+        [([part, used].min.to_f / total).clamp(0.0, 1.0), (used.to_f / total).clamp(0.0, 1.0), text]
+      end
+
+      def item_meter_text(item, reading) = item.part ? stacked(item, reading)[2] : meter_text(item.signal, reading)
+
       def max_width(texts) = texts.map { |t| Widgets.visible_width(t || Widgets::UNKNOWN) }.max || 0
 
       # Labels and texts of a panel's one-line words share widths, so bars and charts line up.
@@ -299,6 +326,8 @@ module Agentmon
       end
 
       def meter(ctx, rt, item)
+        return stacked_meter(ctx, rt, item) if item.part
+
         reading = rt.reading
         sig = item.signal
         fraction = Signals.fraction(sig, reading)
@@ -306,7 +335,7 @@ module Agentmon
         shown = fraction && ctx.motion.tween([:agentmon_meter, ctx.panel.name, sig.name], fraction,
                                                   duration: TWEEN_SECONDS)
         pulse = rt.pulse(ctx.motion, [:agentmon_pulse, ctx.panel.name, sig.name], text)
-        text_w = max_width(ctx.panel.items.grep(Meter).map { |m| meter_text(m.signal, reading) })
+        text_w = max_width(ctx.panel.items.grep(Meter).map { |m| item_meter_text(m, reading) })
         label_w = label_width(ctx.panel)
         width = ctx.width
         steps = shown && (shown * width * 8).round
@@ -314,6 +343,27 @@ module Agentmon
           bar = item.heat && fraction ? R2UI::Widgets::Glyphs.heat(shown) : R2UI::Widgets::Glyphs.fg(Widgets::ACCENT)
           Widgets.meter(label: sig.label, text:, fraction: shown, width:, label_width: label_w, text_width: text_w,
                         bar_sgr: bar, text_sgr: value_sgr(sig, fraction, pulse, text))
+        end
+      end
+
+      # `meter sig, part:`: both fractions eased (keys per panel and signal), the text pulsing.
+      def stacked_meter(ctx, rt, item)
+        reading = rt.reading
+        sig = item.signal
+        part, used, text = stacked(item, reading)
+        panel = ctx.panel.name
+        shown = used && ctx.motion.tween([:agentmon_meter, panel, sig.name], used, duration: TWEEN_SECONDS)
+        shown_part = part && ctx.motion.tween([:agentmon_meter_part, panel, sig.name, item.part.name], part,
+                                              duration: TWEEN_SECONDS)
+        pulse = rt.pulse(ctx.motion, [:agentmon_pulse, panel, sig.name, item.part.name], text)
+        text_w = max_width(ctx.panel.items.grep(Meter).map { |m| item_meter_text(m, reading) })
+        label_w = label_width(ctx.panel)
+        width = ctx.width
+        steps = [shown, shown_part].map { |f| f && (f * width * 8).round }
+        rt.cached([:stacked_meter, item, width, steps, text, pulse, text_w, label_w]) do
+          Widgets.stacked_meter(label: sig.label, text:, part: shown_part, fraction: shown, width:,
+                                label_width: label_w, text_width: text_w,
+                                text_sgr: Widgets.value_sgr(unit: item.part.unit, pulse:, known: !text.nil?))
         end
       end
 
