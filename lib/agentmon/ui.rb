@@ -14,12 +14,26 @@ module Agentmon
 
     module_function
 
-    def install(engine:, registry: Agentmon.registry, into: R2UI.registry)
+    # `view:` (a registered Agentmon.view name) builds the dashboard from that view's rows instead
+    # of the registry layout (docs/views.md); resources then get the views' decorations.
+    def install(engine:, view: nil, registry: Agentmon.registry, into: R2UI.registry)
+      spec = view && (registry[:view, view] or raise Error, "no layout #{view} (#{layouts(registry).join(", ")})")
+      Views.installing = spec
       registry.resources.each do |name, blocks|
         into.add_resource(R2UI::DSL::Resource.build(name) { blocks.each { |b| instance_exec(engine, &b) } })
       end
-      into.add_dashboard(build_dashboard(engine, registry))
+      if spec
+        into.add_resource(Views.signals_resource(engine))
+        into.add_dashboard(Views.dashboard(spec, engine, registry))
+      else
+        into.add_dashboard(build_dashboard(engine, registry))
+      end
+    ensure
+      Views.installing = nil
     end
+
+    # The registered view names, for --layout.
+    def layouts(registry = Agentmon.registry) = registry.all(:view).map(&:name)
 
     def build_dashboard(engine, registry)
       layout = registry.layout

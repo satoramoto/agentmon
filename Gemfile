@@ -4,7 +4,9 @@ source "https://rubygems.org"
 
 # A sibling r2ui checkout when there is one (local work on both), otherwise main on GitHub (CI).
 # `../r2ui` from the main checkout, `../../r2ui` from a worktree in agentmon-wt/<id>/.
-r2ui_path = %w[../r2ui ../../r2ui].find { |p| File.exist?(File.expand_path("#{p}/r2ui.gemspec", __dir__)) }
+# proto/design-directions: the matching r2ui prototype worktree first (motion, glyphs, column priority).
+r2ui_path = %w[../../r2ui-wt/design-prototypes ../r2ui ../../r2ui]
+            .find { |p| File.exist?(File.expand_path("#{p}/r2ui.gemspec", __dir__)) }
 if r2ui_path
   gem "r2ui", path: r2ui_path
 else

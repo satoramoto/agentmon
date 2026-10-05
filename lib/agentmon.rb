@@ -33,3 +33,6 @@ module Agentmon
 end
 
 Agentmon.load_extensions
+# Performance views (docs/views.md): the DSL, then the layouts in lib/agentmon/views/*.rb. After
+# the extensions, since views reuse their panels and resources.
+require_relative "agentmon/views"
