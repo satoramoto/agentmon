@@ -62,7 +62,13 @@ module Agentmon
         "focus.pagein_rate" => entry("pageins", :per_sec),
         "focus.processes" => entry("procs", :integer),
         "focus.read_rate" => entry("read", :bytes_per_sec),
-        "focus.write_rate" => entry("write", :bytes_per_sec)
+        "focus.write_rate" => entry("write", :bytes_per_sec),
+        "focus.net_in_rate" => entry("net in", :bytes_per_sec),
+        "focus.net_out_rate" => entry("net out", :bytes_per_sec),
+        "focus.bytes_in" => entry("received", :bytes),
+        "focus.bytes_out" => entry("sent", :bytes),
+        "focus.connections" => entry("conns", :integer),
+        "focus.remote_hosts" => entry("hosts", :integer)
       }.freeze
 
       module_function
@@ -195,28 +201,46 @@ module Agentmon
 
       # The virtual metric :focus: the focused session, else every agent session together.
       # FocusedReading already narrows :session_ledger and :session_memory to the focused session,
-      # so this only aggregates what the reading gives.
+      # so this only aggregates what the reading gives (:session_network too).
       module Focus
         LEDGER_SUMS = %i[processes read_rate write_rate].freeze
         MEMORY_SUMS = %i[footprint resident wired peak_footprint growth_rate pagein_rate].freeze
+        # focus member => SessionNetwork member summed into it.
+        NETWORK_SUMS = { net_in_rate: :in_rate, net_out_rate: :out_rate, bytes_in: :bytes_in, bytes_out: :bytes_out,
+                         connections: :connections, remote_hosts: :remote_hosts }.freeze
+        # focus trend => SessionNetwork trend, used when focused on one session (else History).
+        NETWORK_TRENDS = { net_in_trend: :in_trend, net_out_trend: :out_trend }.freeze
 
         module_function
 
         # A Hash: cpu (percent of the machine), processes, read_rate, write_rate (alive sessions),
-        # footprint .. pagein_rate (session memory), label, focused. Unknown sums are nil; an empty
-        # list sums to 0.
+        # footprint .. pagein_rate (session memory), net_in_rate .. remote_hosts (session network;
+        # remote_hosts sums each session's count, so a host two sessions share counts twice),
+        # label, focused, and when focused the session's net_in_trend/net_out_trend. Unknown sums
+        # are nil; an empty list sums to 0.
         def value(reading)
           ledger = safe(reading, :session_ledger)
           alive = ledger&.select { |s| s.ended_at.nil? }
           memory = safe(reading, :session_memory)
+          network = safe(reading, :session_network)
           focus = reading.respond_to?(:focus) ? reading.focus : nil
 
           result = { cpu: cpu(alive, safe(reading, :system)) }
           LEDGER_SUMS.each { |key| result[key] = sum(alive, key) }
           MEMORY_SUMS.each { |key| result[key] = sum(memory, key) }
+          NETWORK_SUMS.each { |key, member| result[key] = sum(network, member) }
+          trends(network).each { |key, series| result[key] = series } if focus && network&.size == 1
           result[:label] = focus ? label(focus, ledger, memory) : "all agents"
           result[:focused] = !focus.nil?
           result
+        end
+
+        # The one session's own rate trends (Arrays only).
+        def trends(network)
+          NETWORK_TRENDS.filter_map do |key, member|
+            series = Signals.fetch(network.first, member)
+            [key, series] if series.is_a?(Array)
+          end
         end
 
         # Sum of alive sessions' CPU (percent of one core) / ncpu: percent of the machine.

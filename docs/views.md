@@ -29,6 +29,25 @@ Any widget takes `label:`, `unit:` and `max:`/`of:` overrides.
 | `:number` | r2ui `:number` | `1.52` |
 | `:integer` | r2ui `:integer` | `10` |
 
+**The `focus` metric.** `"focus.*"` signals are the focused session, else every alive agent session
+together (`Signals::Focus.value`; the reading is already narrowed while a session is focused):
+`cpu` (percent of the machine), `processes`, `read_rate`, `write_rate` (ledger), `footprint`,
+`resident`, `wired`, `peak_footprint`, `growth_rate`, `pagein_rate` (session memory), and from
+`reading[:session_network]`:
+
+| Signal | Label | Unit | Sums |
+|---|---|---|---|
+| `focus.net_in_rate` | net in | bytes/s | `in_rate` |
+| `focus.net_out_rate` | net out | bytes/s | `out_rate` |
+| `focus.bytes_in` | received | bytes | `bytes_in` |
+| `focus.bytes_out` | sent | bytes | `bytes_out` |
+| `focus.connections` | conns | integer | `connections` |
+| `focus.remote_hosts` | hosts | integer | `remote_hosts` (per session, so a host two sessions share counts twice) |
+
+An unknown metric stays unknown (nil, never 0); an empty list sums to 0. While one session is
+focused, `trend "focus.net_in_rate"` / `"focus.net_out_rate"` draw that session's own
+`in_trend` / `out_trend`; otherwise the views History keeps the series.
+
 **History.** The views layer keeps the last 120 values (four minutes at 2 s) of every signal a
 view draws, appended once per new Reading (keyed by `reading.at`), so `trend "memory.used"` works
 for any signal without the metric storing a `*_trend`. Metrics that already keep a trend
@@ -84,13 +103,59 @@ resource:`). Inside a panel, the view words are:
 | `trend sig, ..., height: 3, label: nil, max: nil` | a label line (`label … current value`, value pulsing on change) and a braille area chart (`Glyphs.braille_area`), newest at the right, coloured by heat of the latest fraction (accent when the signal has no max). Several signals stack, sharing the height. `height: nil` takes the rest of the panel; a Float below 1 takes that share of what is left (labels included), e.g. `0.65` above a `top` | height + 1 per signal |
 | `spark sig, label: nil, max: nil` | one line: `label ⣀⣀⣠⣴⣾⣿ value` (`Glyphs.braille_line`) | 1 |
 | `stat sig, ..., columns: 2` | a label/value grid, `columns` per line (1 when the panel is narrower than 40), values pulse on change, percents heat-coloured | ceil(n / columns) |
-| `top resource, by: nil, limit: nil, columns: nil, group_by: nil, widths: {}, spark: true` | the resource's r2ui table with `motion: true`, only `columns:` (in that order), sorted by `by:` desc. Percent columns draw heat, bytes the accent, the sort column a braille sparkline (`spark: false` leaves it off in narrow panels). Text columns get fixed widths (name 18, session 16, cwd 20, label 18; `widths:` overrides) so values are cut at a word boundary by agentmon, not mid-word by r2ui; columns drop by priority when the panel is narrow | rest of the panel |
+| `top resource, by: nil, limit: nil, columns: nil, group_by: nil, widths: {}, spark: true` | the resource's r2ui table with `motion: true`, only `columns:` (in that order), sorted by `by:` desc. Percent columns draw heat, bytes the accent; `spark:` puts a braille sparkline (5 cells, percent ones heat-coloured on a 0–100 scale) on the sort column (`true`), on none (`false`, narrow panels) or on the listed columns (`spark: %i[cpu footprint net_out_rate]`). Sparklines are per resource on a view: one `top` asking for a column's sparkline puts it on every table of that resource in the view. Text columns get fixed widths (name 18, session 16, cwd 20, label 18; `widths:` overrides) so values are cut at a word boundary by agentmon, not mid-word by r2ui; columns drop by priority when the panel is narrow | rest of the panel |
 | `band :session, show: %i[cpu footprint]` | the machine tile, then one tile per live session side by side: label, a CPU meter, the `show` values and a braille spark; the focused session's tile in the accent border; `←`/`→` (and `h`/`l`) pick a tile, Enter focuses that session (`engine.focus=`), Escape clears. Tiles are at least 18 cells wide (a `claude 12345` title fits uncut); more sessions than fit show a `+N` tail. No status-bar hint (r2ui drops all hints when one more doesn't fit) | rest of the panel |
 | `detail :process, columns: 1` | the Detail panel for the selected process (`UI::ProcessDetail.lines`): its heading (name, pid) on a full-width line, the pairs reflowed into `columns` columns under it; a wide drawer under the table uses 3 | rest of the panel |
 | `use :name, span: nil, title: nil` | an existing registered agentmon panel (`:memory`, `:session`, `:process`, `:detail`, `:session_memory`) at this spot, as the row-level word `use` | its own |
 
 `use` is a row-level word (beside `panel`); the others are panel items. A `panel` with only view
 items takes `resource: nil` implicitly.
+
+### Drilling into a session: `focused`
+
+```ruby
+Agentmon.view :dense do
+  row height: 6 do ... end                # home rows: shown while no session is focused
+  row { top :session, by: :cpu, ... }
+  focused do                              # shown instead while a session is focused
+    row height: 8 do panel :s_cpu, title: "CPU" do ... end end
+    row { top :process, ... }
+    row height: 7 do detail :process, columns: 3 end
+  end
+end
+```
+
+`focused` is a view-level word (once per view, not nested) whose rows replace the home rows while
+a session is focused (`engine.focus`, lib/agentmon/focus.rb). Named after the state it shows, as
+in "the focused session", and matching `engine.focus` / `focus.*` signals; `drill`/`detail` would
+clash with the `detail` word. Enter on the Sessions table (or a band tile) focuses that session, F
+on a Processes row its session, Escape comes back (ui/session_focus.rb); a focused session that
+leaves the ledger comes back on its own.
+
+- **Layout.** Each set is laid out exactly as a view with only those rows: `row height:` is fixed
+  lines (an Integer) or nil (rows without a height share what is left), and the last row of the
+  set takes whatever remains. The r2ui dashboard holds both sets (so every panel has its feed and
+  table state from the start) and `Views::Drill` swaps `dashboard.rows` to the visible set before
+  every key and every frame: hidden panels are not on the dashboard, so they draw nothing, cost no
+  drawing, and tab / shift-tab cycle only the visible ones. Panel names may repeat across the two
+  sets (`:process` in both): lookups by name (`:session`, `:process`, `:detail`, used by session
+  focus and the Detail panel) find the visible one. Feeds are per resource and keep refreshing
+  as before; nothing samples more.
+- **Key focus follows the mode.** Drilling in moves keys to the first table panel of the focused
+  rows (the processes); coming back restores the home panel that had keys before. A view with a
+  `focused` section opens with keys on its first home table (Sessions, when it comes first).
+- **Status bar.** At home `sessions · ⏎ open a session`; drilled in `▸ claude 4242 · repo · esc
+  back to sessions`. A probe or metric problem (`⚠ ...`) still wins. Views without `focused`, and
+  the default dashboard, keep their status (`focus: ... (esc: all)` while focused).
+
+### The anomaly mark
+
+On a view, a session row whose `net_flags` is not empty shows `⚑ ` before its label, the label
+cell in red (`#E5484D`), still cut at a word boundary to the column width. The metric decides
+(metrics/network.rb, `SessionNetwork#flags`): a session is flagged when its net out (or in) rate
+is ≥ 8× the median of its previous 30 known values and ≥ 1 MiB/s (`:out_spike`, `:in_spike`), or
+when it talks to ≥ 20 distinct remote hosts (`:many_hosts`). The view only marks it; empty or
+missing flags are normal.
 
 Every word fits its width: labels are padded, values right-aligned, a label too long is cut with
 `…` at a word boundary when one exists (a space or `·`, `-`, `,`, `:`, `/`: `bare-modifier…`),
