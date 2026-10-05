@@ -141,7 +141,8 @@ module Agentmon
         @items << Meter.new(signal: Views.signal(sig, of:, max:, label:, unit:), heat:)
       end
 
-      # Several signals stack, sharing `height` chart lines (nil: the rest of the panel).
+      # Several signals stack, sharing `height` chart lines (nil: the rest of the panel; a Float
+      # below 1: that share of the lines left, labels included, e.g. 0.6 above a `top`).
       def trend(*sigs, height: 3, label: nil, max: nil, unit: nil)
         @items << Trend.new(signals: sigs.map { |s| Views.signal(s, label:, max:, unit:) }.freeze, height:)
       end
@@ -259,7 +260,12 @@ module Agentmon
       def trend(ctx, rt, item)
         reading = rt.reading
         sigs = item.signals
-        room = item.height || [ctx.height - sigs.size, sigs.size].max
+        room = case item.height
+               when nil then ctx.height - sigs.size                         # the rest of the panel
+               when Float then (ctx.height * item.height).floor - sigs.size # a share of what is left
+               else item.height
+               end
+        room = [room, sigs.size].max
         share, extra = room.divmod(sigs.size)
         sigs.each_with_index.flat_map do |sig, i|
           values = rt.series(sig, reading)
@@ -458,17 +464,25 @@ module Agentmon
                    write_rate: 2, cpu_seconds: 1, bytes_written: 1 }
       }.freeze
 
+      # Text columns get a fixed width in a view, so their values are cut at a word boundary here
+      # (r2ui's table cuts a flexible column mid-word). `top widths:` overrides these.
+      WIDTHS = {
+        process: { name: 18, session: 16, cwd: 20 },
+        session: { label: 18 }
+      }.freeze
+      FROM_LEFT = %i[cwd].freeze
+
       module_function
 
       # Heat on percent cells (a full core is red), the accent on bytes, a braille sparkline on
-      # each sort column, priorities for dropping, and fixed word-cut widths from `top widths:`.
+      # each sort column, priorities for dropping, and fixed word-cut widths (WIDTHS, then `top
+      # widths:`). Applies to every panel of the resource on a view dashboard, `use` ones too.
       def call(resource, name)
         view = Views.installing or return
         tops = Views.tops(view, name)
-        return if tops.empty?
-
         sorts = tops.select(&:spark).filter_map(&:by)
-        widths = tops.map(&:widths).reduce({}, :merge)
+        sorts = [:cpu] if tops.empty?
+        widths = tops.map(&:widths).reduce(WIDTHS.fetch(name, {}), :merge)
         resource.columns.map! { |col| column(col, name, sorts, widths) }
       end
 
@@ -494,7 +508,7 @@ module Agentmon
           opts[:width] = w
           opts[:reader] = lambda do |row|
             value = reader ? reader.call(row) : R2UI::Value.fetch(row, key)
-            value.is_a?(String) ? Widgets.cut(value, w) : value
+            value.is_a?(String) ? Widgets.cut(value, w, from: FROM_LEFT.include?(key) ? :left : :right) : value
           end
         end
         col.with(**opts)

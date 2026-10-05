@@ -13,6 +13,7 @@ module Agentmon
     # The examples below are the plain text (escapes stripped).
     #
     #   cut("claude 74432 · agentmon", 15)              # => "claude 74432…"
+    #   cut("bare-modifier-monitor", 16)                # => "bare-modifier…"
     #   cut("~/src/very/long/repo", 12, from: :left)    # => "…/long/repo"
     #   meter(label: "busy", text: "42%", fraction: 0.42, width: 20)
     #                                                   # => "busy ▕███▊     ▏ 42%"
@@ -232,7 +233,7 @@ module Agentmon
       def cut_right(text, width)
         best = nil
         text.each_char.with_index do |ch, i|
-          next unless ch == " "
+          next unless SEPARATORS.include?(ch) # "bare-modifier-monitor" → "bare-modifier…"
 
           prefix = strip_tail(text[0, i])
           best = prefix if !prefix.empty? && visible_width(prefix) + 1 <= width
