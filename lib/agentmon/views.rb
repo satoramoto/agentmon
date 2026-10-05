@@ -623,8 +623,10 @@ module Agentmon
 
         engine = rt.engine
         id = engine.focus or return HOME
-        label = engine.focused_session&.label || id.to_s
-        "▸ #{label} · #{BACK}"
+        session = engine.focused_session
+        label = session&.label || id.to_s
+        status = session.respond_to?(:status) && session.status # Claude Code's "busy" / "idle"
+        "▸ #{label}#{" · #{status}" if status} · #{BACK}"
       end
     end
 

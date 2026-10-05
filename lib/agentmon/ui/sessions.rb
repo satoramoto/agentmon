@@ -37,6 +37,7 @@ module Agentmon
           alive: session.alive?,
           label: ended ? "#{session.label} · ended #{age(now - ended)} ago" : session.label,
           cwd: session.cwd,
+          search: session.label,  # uncut, for `/` (not a column)
           title: session.title,   # human name (also at the front of label); nil when unknown
           status: session.status, # Claude Code's "busy"/"idle"; nil when unknown
           processes: session.processes,
@@ -98,7 +99,9 @@ module Agentmon
       column :age, label: "Age", width: 7, align: :right # fixed, so the label takes the spare width
     end
 
-    filter :label, :cwd
+    # `/` matches the whole label (name included), not the Session column's text: r2ui's search
+    # reads a column through its reader (search.rb:31), and a view cuts that one to its width.
+    filter :search, :cwd
   end
 
   # Network columns, on performance views only (--layout): the default dashboard keeps its columns.

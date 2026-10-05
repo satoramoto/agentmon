@@ -57,6 +57,28 @@ class DenseViewTest < Minitest::Test
     end
   end
 
+  def test_a_name_cut_by_the_session_column_is_still_found_by_search
+    names = Agentmon::Metrics::SessionNames
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "200.json"), '{"pid":200,"name":"Agentmon r2ui integration","status":"busy"}')
+      names.claude_dir = dir
+      with_app do |app|
+        text = view_frame(app)
+
+        assert_includes text, "Agentmon r2ui…" # name first, cut at a word boundary to 23 cells
+        refute_includes text, "integration"
+
+        app.press("/", *"integration".chars, "enter")
+        found = view_frame(app)
+
+        assert_includes found, "Agentmon r2ui…"
+        refute_includes found, "claude 303"
+      end
+    ensure
+      names.claude_dir = NO_NAMES_DIR
+    end
+  end
+
   def test_machine_strip_shows_fixture_values
     with_app do |app|
       lines = view_frame(app).split("\n")

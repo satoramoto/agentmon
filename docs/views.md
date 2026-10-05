@@ -101,7 +101,7 @@ resource:`). Inside a panel, the view words are:
 
 | Word | Draws | Lines |
 |---|---|---|
-| `meter sig, of: nil, max: nil, label: nil, heat: true` | `label ▕bar▏ value` or `value / total pct`; the bar is eighth-block precise (`Glyphs.bar`), eased, heat-coloured (or accent when `heat: false`) | 1 |
+| `meter sig, of: nil, max: nil, label: nil, heat: true, part: nil` | `label ▕bar▏ value` or `value / total pct`; the bar is eighth-block precise (`Glyphs.bar`), eased, heat-coloured (or accent when `heat: false`). `part:` stacks a signal into the bar (needs a total): `meter "memory.used", part: "focus.footprint", label: "RAM"` draws the part from the left in the accent, the rest of used dim, free empty, eighth-block precise at both boundaries (`Widgets.stacked_bar`), and the text `part share · used/total` (`387M 1% · 24G/32G`, the share of the total) | 1 |
 | `trend sig, ..., height: 3, label: nil, max: nil` | a label line (`label … current value`, value pulsing on change) and a braille area chart (`Glyphs.braille_area`), newest at the right, coloured by heat of the latest fraction (accent when the signal has no max). Several signals stack, sharing the height. `height: nil` takes the rest of the panel; a Float below 1 takes that share of what is left (labels included), e.g. `0.65` above a `top` | height + 1 per signal |
 | `spark sig, label: nil, max: nil` | one line: `label ⣀⣀⣠⣴⣾⣿ value` (`Glyphs.braille_line`) | 1 |
 | `stat sig, ..., columns: 2` | a label/value grid, `columns` per line (1 when the panel is narrower than 40), values pulse on change, percents heat-coloured | ceil(n / columns) |
@@ -146,8 +146,9 @@ leaves the ledger comes back on its own.
 - **Key focus follows the mode.** Drilling in moves keys to the first table panel of the focused
   rows (the processes); coming back restores the home panel that had keys before. A view with a
   `focused` section opens with keys on its first home table (Sessions, when it comes first).
-- **Status bar.** At home `sessions · ⏎ open a session`; drilled in `▸ claude 4242 · repo · esc
-  back to sessions`. A probe or metric problem (`⚠ ...`) still wins. Views without `focused`, and
+- **Status bar.** At home `sessions · ⏎ open a session`; drilled in `▸ Fix the login · claude 4242 ·
+  repo · busy · esc back to sessions` (the session's label, which leads with its name when one is
+  known, then Claude Code's busy/idle when known). A probe or metric problem (`⚠ ...`) still wins. Views without `focused`, and
   the default dashboard, keep their status (`focus: ... (esc: all)` while focused).
 
 ### The anomaly mark
@@ -167,12 +168,15 @@ draws its first lines; it never wraps.
 ## Running a view
 
 ```
-agentmon --layout visual        # one of dense, visual (the registered views)
+agentmon                        # the dense view
+agentmon --layout visual        # one of classic, dense, visual
+agentmon --layout classic       # the panel dashboard (rows and panels from Agentmon.row/panel)
 agentmon --layout visual | cat  # one plain frame, for tests and reviews
 agentmon --no-motion            # no animation (also AGENTMON_MOTION=0)
 ```
 
-Without `--layout` the dashboard is today's (rows and panels from `Agentmon.row`/`Agentmon.panel`).
+Without `--layout` agentmon opens dense; `--layout classic` is the panel dashboard (rows and
+panels from `Agentmon.row`/`Agentmon.panel`).
 `Agentmon.view` registers a view (`registry` kind `:view`); `UI.install(engine:, view: name)` builds
 the r2ui dashboard from the view's rows instead of the registry layout. The views layer is an
 r2ui extension (`R2UI.extension :agentmon_views`) with `dsl :panel` keywords and `panel_item`
@@ -199,8 +203,8 @@ the Sessions table taking the rest (`top :session` with label, procs, CPU, footp
 write, net in and out; braille sparklines on CPU and net out, `spark: %i[cpu net_out_rate]`), and an
 8-line all-agents strip (procs, resident, CPU and footprint `trend`s; remote hosts, connections and
 net in/out `trend`s). Drilled in: a 5-line strip of the session's CPU (CPU, disk read/write
-`spark`s, procs), Memory (footprint `meter` of machine used, footprint `spark`, resident, wired,
-growth, pageins) and Network (net in/out `spark`s, received, sent, hosts, connections); its
+`spark`s, procs), Memory (the machine's RAM `meter` with the session's footprint as its accent
+`part:`, then pressure, resident, wired, growth; pageins when the panel is 40 wide) and Network (net in/out `spark`s, received, sent, hosts, connections); its
 Processes (`top :process` with pid, name, CPU, footprint, wait, read, write, net in, net out); a
 9-line Connections table; a 7-line `detail :process, columns: 3` drawer.
 
@@ -208,7 +212,8 @@ Processes (`top :process` with pid, name, CPU, footprint, wait, read, write, net
 `stat` + used `trend` (11 lines); Network and Disk `trend`s (8 lines); the Sessions table (label,
 CPU, footprint, read, write, net in, net out; sparklines on CPU and net out); an all-agents row of
 CPU/footprint and net in/out `trend`s (10 lines). Drilled in: the session's CPU `meter` + `trend` +
-procs/read/write beside its footprint `meter` + memory `stat` + footprint `trend`; its Network and
+procs/read/write beside the machine's RAM `meter` with the session's footprint as its `part:`, a
+pressure `meter`, memory `stat` and footprint `trend`; its Network and
 Disk `trend`s; its processes (name, CPU, footprint, net out) beside the process `detail` (span
 3:2); an 8-line Connections table.
 

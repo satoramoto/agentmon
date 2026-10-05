@@ -226,6 +226,19 @@ class DrillViewTest < Minitest::Test
     end
   end
 
+  def test_status_leads_with_the_name_and_shows_busy_or_idle
+    session = Agentmon::Session.new(
+      id: "claude-200-1", kind: :cli, name: "claude", root_pid: 200, label: "Fix the login · claude 200 · repo",
+      cwd: "/r/repo", started_at: 0.0, first_seen_at: 0.0, last_seen_at: 1.0, ended_at: nil, processes: 1, cpu: 0.0,
+      footprint: 0, resident: 0, read_rate: 0.0, write_rate: 0.0, peak_footprint: 0, cpu_seconds: 0.0, bytes_read: 0,
+      bytes_written: 0, title: "Fix the login", status: "busy"
+    )
+    engine = Struct.new(:focus, :focused_session).new("claude-200-1", session)
+    rt = Struct.new(:engine) { def drill? = true }.new(engine)
+
+    assert_equal "▸ Fix the login · claude 200 · repo · busy · esc back to sessions", Agentmon::Views::Drill.status(rt)
+  end
+
   def test_problems_still_win_the_status_bar
     with_engine(engine) do
       app = app_for(DRILL)
