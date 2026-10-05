@@ -34,12 +34,32 @@ class LayoutCliTest < Minitest::Test
     refute_includes result.out, "\e["
   end
 
+  def test_no_layout_prints_the_dense_layout
+    result = with_motion_env(nil) { agentmon }
+
+    assert result.success?, result.err
+    assert_includes result.out, "load 1m" # dense's machine strip
+    refute_includes result.out, "Memory by session" # a classic panel
+    refute_includes result.out, "\e["
+  end
+
+  def test_layout_classic_prints_the_panel_dashboard
+    result = with_motion_env(nil) { agentmon("--layout", "classic") }
+
+    assert result.success?, result.err
+    assert_includes result.out, "Processes"
+    assert_includes result.out, "Memory by session"
+    refute_includes result.out, "load 1m"
+  end
+
   def test_unknown_layout_fails_naming_the_choices
     result = with_motion_env(nil) { agentmon("--layout", "nope") }
 
     refute result.success?
     message = result.err + result.out
     assert_includes message, "nope"
+    assert_includes message, "classic"
+    assert_includes message, "dense"
     assert_includes message, "visual"
   end
 

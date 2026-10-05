@@ -58,7 +58,8 @@ can be built at once and merged in any order.
   theme), and `Agentmon.panel`s placed in `Agentmon.row`s by `order:`. Every block gets the Engine.
 - **Command line** (`lib/agentmon/program.rb`): an r2ui CLI program. `agentmon` with no command
   opens the dashboard (r2ui's `dashboard` helper: full screen on a terminal, one plain frame in a
-  pipe); `Agentmon.command` adds subcommands and `Agentmon.cli` root-level DSL.
+  pipe) in the dense layout; `--layout classic` is the panel dashboard (`Agentmon.row`/`panel`), `--layout NAME` any
+  registered view (docs/views.md). `exe/agentmon` exits 1 with a message off macOS. `Agentmon.command` adds subcommands and `Agentmon.cli` root-level DSL.
 
 Sampling cost per tick: one `ps` and two Fiddle calls per process (`proc_pid_rusage` v4,
 `proc_pidinfo(PROC_PIDTASKALLINFO)`): the `processes` probe takes ~50 ms for 800 processes on an

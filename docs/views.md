@@ -167,12 +167,14 @@ draws its first lines; it never wraps.
 ## Running a view
 
 ```
-agentmon --layout visual        # one of dense, visual (the registered views)
+agentmon                        # the dense layout (the default)
+agentmon --layout visual        # one of classic, dense, visual (classic plus the registered views)
 agentmon --layout visual | cat  # one plain frame, for tests and reviews
 agentmon --no-motion            # no animation (also AGENTMON_MOTION=0)
 ```
 
-Without `--layout` the dashboard is today's (rows and panels from `Agentmon.row`/`Agentmon.panel`).
+`agentmon` with no `--layout` opens dense. `--layout classic` is the panel dashboard (rows and
+panels from `Agentmon.row`/`Agentmon.panel`; `UI.install(view: nil)`).
 `Agentmon.view` registers a view (`registry` kind `:view`); `UI.install(engine:, view: name)` builds
 the r2ui dashboard from the view's rows instead of the registry layout. The views layer is an
 r2ui extension (`R2UI.extension :agentmon_views`) with `dsl :panel` keywords and `panel_item`
