@@ -1,9 +1,18 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# agentmon                  the dashboard (one plain frame when piped: `agentmon | cat`)
+# agentmon                  the dense layout (one plain frame when piped: `agentmon | cat`)
+# agentmon --layout NAME    another layout: classic (the panel dashboard) or a view in docs/views.md
 # agentmon top --once       processes of agent sessions, plain table
 # agentmon --help           every command
+#
+# macOS only: the library reads processes through libproc (Fiddle) and nettop, so off macOS it
+# stops here with a message instead of failing to load.
+unless RUBY_PLATFORM.include?("darwin")
+  warn "agentmon: macOS only (it reads process data from the macOS kernel and nettop); this is #{RUBY_PLATFORM}"
+  exit 1
+end
+
 require_relative "../lib/agentmon"
 
 Agentmon::Program.start(ARGV)
