@@ -16,10 +16,15 @@ module Agentmon
         registry.cli_blocks.each { |b| instance_exec(&b) }
         registry.commands.each { |c| command(c.name, &c.block) }
 
+        layouts = UI.layouts(registry).map(&:to_s)
+        option :layout, in: layouts, desc: "A performance view instead of the default dashboard (docs/views.md)"
+        flag :motion, default: true, desc: "Animate meters, changed values and moved rows (AGENTMON_MOTION=0: off)"
+
         run do
           engine = Agentmon.engine
           engine.recording = shell.interactive? # history is written while the dashboard is open
-          UI.install(engine:)
+          Views.motion = options[:motion] && ENV["AGENTMON_MOTION"] != "0"
+          UI.install(engine:, view: options[:layout]&.to_sym)
           dashboard UI::DASHBOARD
         end
       end

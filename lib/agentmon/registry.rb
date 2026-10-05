@@ -32,7 +32,7 @@ module Agentmon
   # Everything the extension files registered. One per process (Agentmon.registry); tests build
   # their own to try a registration in isolation.
   class Registry
-    KINDS = %i[probe metric recorder row panel command detail_section].freeze
+    KINDS = %i[probe metric recorder row panel command detail_section view].freeze
 
     def initialize
       @items = KINDS.to_h { |k| [k, {}] }
@@ -130,6 +130,12 @@ module Agentmon
     # More lines in the Detail panel for the selected process: `{ |row, reading| [[label, value]] }`.
     def detail_section(name, order: 100, &block)
       registry.add(:detail_section, DetailSection.new(name: name.to_sym, order:, block: need(block)))
+    end
+
+    # A performance view (docs/views.md): rows of panels of view words, run with
+    # `agentmon --layout NAME`. The block runs on Views::ViewBuilder (lib/agentmon/views.rb).
+    def view(name, title: "agentmon", &block)
+      registry.add(:view, Views.build(name, title:, &need(block)))
     end
 
     # Root-level r2ui CLI DSL (version, completion, global flags), run on the root builder.
