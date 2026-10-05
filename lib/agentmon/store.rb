@@ -35,7 +35,7 @@ module Agentmon
       line = "#{JSON.generate(record)}\n"
       @lock.synchronize do
         FileUtils.mkdir_p(File.dirname(path))
-        File.open(path, "a") { |f| f.write(line) }
+        File.open(path, "a", encoding: Encoding::UTF_8) { |f| f.write(line) }
       end
       record
     end
@@ -48,7 +48,8 @@ module Agentmon
       since = since&.to_f
       till = till&.to_f
       files(kind, since).each do |path|
-        File.foreach(path) do |line|
+        # UTF-8 whatever the locale (launchd, cron and `env -i` start with none).
+        File.foreach(path, encoding: Encoding::UTF_8) do |line|
           record = parse(line) or next
           t = record[:t].to_f
           next if (since && t < since) || (till && t >= till)
