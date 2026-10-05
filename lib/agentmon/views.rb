@@ -583,7 +583,9 @@ module Agentmon
     module Decorate
       PRIORITIES = {
         process: { name: 9, cpu: 9, footprint: 8, session: 6, pid: 5, run_wait: 4, read_rate: 4, write_rate: 4,
-                   pagein_rate: 3, resident: 2, cwd: 1 },
+                   net_out_rate: 4, net_in_rate: 3, pagein_rate: 3, resident: 2, cwd: 1 },
+        connection: { process: 9, remote_text: 8, out_rate: 7, in_rate: 7, state: 6, bytes_out: 5, bytes_in: 5,
+                      protocol: 4 },
         session: { label: 9, cpu: 9, footprint: 8, processes: 6, age: 5, net_out_rate: 4, net_in_rate: 4,
                    peak_footprint: 3, remote_hosts: 3, connections: 2, read_rate: 2, write_rate: 2, cpu_seconds: 1,
                    bytes_written: 1, bytes_in: 1, bytes_out: 1 }
@@ -668,7 +670,7 @@ module Agentmon
 
     # Reached through the resource builder: r2ui has no way to amend a column another file
     # declared (`column` with the same key appends a second one), so this edits the list.
-    %i[process session].each do |name|
+    %i[process session connection].each do |name|
       Agentmon.extend_resource(name) do |_engine|
         Decorate.call(instance_variable_get(:@r), name)
       end

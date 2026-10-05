@@ -38,19 +38,40 @@ class VisualViewTest < Minitest::Test
 
   def test_visual_shows_every_panel_with_fixture_values
     with_engine(Fixtures.engine(*samples)) do
-      text = frame_of(dashboard_app(view: :visual))
+      text = frame_of(dashboard_app(view: :visual, focus: nil))
 
-      %w[CPU Memory Network Disk Processes Sessions].each { |title| assert_includes text, title }
+      %w[CPU Memory Network Disk Sessions].each { |title| assert_includes text, "─ #{title} " }
+      refute_includes text, "─ Processes " # the session list is home; processes are a drill-down
       assert_includes text, "9.0G / 16G" # memory used / total (app + wired + compressed)
-      assert_includes text, "node" # a process of the Agents scope
       assert_includes text, "claude 200" # a session label
       assert_includes text, "1.0G / 2.0G" # swap used / total
     end
   end
 
+  def test_enter_on_a_session_drills_into_it_and_escape_returns
+    with_engine(Fixtures.engine(*samples)) do
+      app = dashboard_app(view: :visual, focus: nil)
+      frame_of(app) # Enter acts on the line drawn as selected
+      app.press(:enter)
+      text = frame_of(app)
+
+      %w[CPU Memory Network Disk Processes Detail Connections].each { |t| assert_includes text, "─ #{t} " }
+      refute_includes text, "─ Sessions "
+      assert_includes text, "node" # a process of the drilled-into session
+      assert_match(/▸ .* · esc back to sessions/, text.split("\n").last)
+      text.split("\n").each { |line| assert_operator Agentmon::Views::Widgets.visible_width(line), :<=, 100, line }
+
+      app.press(:escape)
+      home = frame_of(app)
+
+      assert_includes home, "─ Sessions "
+      refute_includes home, "─ Processes "
+    end
+  end
+
   def test_no_line_is_wider_than_the_window
     with_engine(Fixtures.engine(*samples)) do
-      text = frame_of(dashboard_app(view: :visual))
+      text = frame_of(dashboard_app(view: :visual, focus: nil))
 
       text.split("\n").each do |line|
         assert_operator Agentmon::Views::Widgets.visible_width(line), :<=, 100, line
@@ -60,7 +81,7 @@ class VisualViewTest < Minitest::Test
 
   def test_unknown_cpu_shows_a_dash_not_zero
     with_engine(Fixtures.engine(*samples(system: false))) do
-      text = frame_of(dashboard_app(view: :visual))
+      text = frame_of(dashboard_app(view: :visual, focus: nil))
       cpu_line = text.split("\n").find { |l| l.include?("CPU ▕") || l.match?(/CPU\s.*▏/) }
 
       refute_nil cpu_line, text
@@ -73,7 +94,7 @@ class VisualViewTest < Minitest::Test
     previous = Agentmon::Views.instance_variable_get(:@motion)
     Agentmon::Views.motion = true
     with_engine(Fixtures.engine(*samples)) do
-      app = dashboard_app(view: :visual)
+      app = dashboard_app(view: :visual, focus: nil)
 
       assert app.motion.enabled
       first = frame_of(app)
@@ -91,7 +112,7 @@ class VisualViewTest < Minitest::Test
     previous = Agentmon::Views.instance_variable_get(:@motion)
     Agentmon::Views.motion = false
     with_engine(Fixtures.engine(*samples)) do
-      app = dashboard_app(view: :visual)
+      app = dashboard_app(view: :visual, focus: nil)
 
       refute app.motion.enabled
       assert_includes frame_of(app), "Memory"

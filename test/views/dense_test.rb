@@ -2,7 +2,8 @@
 
 require "test_helper"
 
-# The dense layout (lib/agentmon/views/dense.rb) at the owner's window size, over fixtures.
+# The dense layout (lib/agentmon/views/dense.rb) at the owner's window size, over fixtures: the
+# session list at home, one session's breakdown, processes and connections when drilled in.
 class DenseViewTest < Minitest::Test
   include Fixtures
 
@@ -30,35 +31,72 @@ class DenseViewTest < Minitest::Test
     end
   end
 
-  def frame
-    with_engine(Fixtures.engine(*samples)) { return view_frame(dashboard_app(view: :dense)) }
+  # Home has no :process panel, so keys stay where the view puts them (the Sessions table).
+  def with_app
+    with_engine(Fixtures.engine(*samples)) { yield dashboard_app(view: :dense, focus: nil) }
   end
 
-  def test_dense_shows_every_panel
-    text = frame
+  def assert_fits(text, width = 100, height = 50)
+    lines = text.split("\n")
 
-    %w[CPU Memory I/O Sessions Processes Detail].each { |title| assert_includes text, "─ #{title} " }
+    assert_equal height, lines.size
+    lines.each { |line| assert_operator Agentmon::Views::Widgets.visible_width(line), :<=, width, line }
+  end
+
+  def test_home_is_the_session_list_with_the_machine_strip
+    with_app do |app|
+      text = view_frame(app)
+
+      %w[CPU Memory I/O Sessions].each { |title| assert_includes text, "─ #{title} " }
+      assert_includes text, "─ All agents "
+      %w[Processes Detail Connections].each { |title| refute_includes text, "─ #{title} " }
+      assert_includes text, "claude 200 · repo" # a session label, uncut
+      ["Session", "Procs", "Footprint", "Read", "Write", "Net in", "Net out"].each { |h| assert_includes text, h }
+      assert_match(/sessions · ⏎/, text.split("\n").last)
+      assert_fits(text)
+    end
   end
 
   def test_machine_strip_shows_fixture_values
-    lines = frame.split("\n")
+    with_app do |app|
+      lines = view_frame(app).split("\n")
 
-    assert_match(/cores\s+10/, lines.find { |l| l.include?("cores") })
-    assert_match(/load 1m\s+1\.5/, lines.find { |l| l.include?("load 1m") })
-    assert_match(/swap\s.*1\.0G/, lines.find { |l| l.include?("swap") })
+      assert_match(/cores\s+10/, lines.find { |l| l.include?("cores") })
+      assert_match(/load 1m\s+1\.5/, lines.find { |l| l.include?("load 1m") })
+      assert_match(/swap\s.*1\.0G/, lines.find { |l| l.include?("swap") })
+    end
   end
 
-  def test_tables_show_sessions_and_processes_with_every_header
-    text = frame
+  def test_enter_drills_into_the_selected_session_and_escape_returns
+    with_app do |app|
+      view_frame(app) # Enter acts on the line drawn as selected
+      app.press(:enter)
+      text = view_frame(app)
 
-    assert_includes text, "claude 200 · repo" # a session label, uncut
-    %w[Session Procs Footprint Age Pid Name Wait Pgin/s Read Write].each { |h| assert_includes text, h }
-    assert_match(/\b201 node\s/, text) # a process of the Agents scope with its pid
+      %w[Processes Connections Detail Network].each { |title| assert_includes text, "─ #{title} " }
+      refute_includes text, "─ Sessions "
+      %w[Pid Name Wait Read Write].each { |h| assert_includes text, h }
+      assert_match(/▸ .* · esc back to sessions/, text.split("\n").last)
+      assert_equal :process, app.focus.name
+      assert_fits(text)
+
+      app.press(:escape)
+      home = view_frame(app)
+
+      assert_includes home, "─ Sessions "
+      refute_includes home, "─ Processes "
+      assert_equal :session, app.focus.name
+    end
   end
 
-  def test_no_line_is_wider_than_the_window
-    frame.split("\n").each do |line|
-      assert_operator Agentmon::Views::Widgets.visible_width(line), :<=, 100, line
+  def test_fits_other_window_sizes
+    with_app do |app|
+      [[120, 40], [200, 50]].each do |w, h|
+        [nil, :enter, :escape].each do |key|
+          app.press(key) if key
+          assert_fits(app.frame(w, h).plain_lines.join("\n"), w, h)
+        end
+      end
     end
   end
 end

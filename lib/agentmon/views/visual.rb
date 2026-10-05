@@ -1,61 +1,9 @@
 # frozen_string_literal: true
 
-# visual: gauges, areas and heat (docs/views.md). Its real frame, from
-# `COLUMNS=100 LINES=50 bundle exec exe/agentmon --layout visual | cat` (one sample, so the areas
-# are still empty; they fill over four minutes):
-#
-# ╭─ CPU ──────────────────────────────────────────╮╭─ Memory ───────────────────────────────────────╮
-# │CPU ▕██████▍                             ▏ 17.6%││used     ▕██████████████▋      ▏   22G / 32G 69%│
-# │last 4 min                                 17.6%││pressure ▕██████▏              ▏           29.0%│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀││swap     ▕███▏                 ▏ 310M / 2.0G 15%│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀││app                 14G  wired              3.2G│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀││compressed         5.5G  cached             7.7G│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀││used, last 4 min                             22G│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │load 1m    4.3  load 5m    3.9  load 15m   4.0  ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# ╰────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
-# ╭─ Network ──────────────────────────────────────╮╭─ Disk ─────────────────────────────────────────╮
-# │net in                                    2.4K/s││disk read                                   0B/s│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │net out                                   2.8K/s││disk write                                 22K/s│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# ╰────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
-# ╭─ Processes ─[Agents] All  Busy  Heavy  Writing  Waiting ─╮╭─ Sessions ─[Live] All ───────────────╮
-# │ Name             Session                 CPU▼  Footprint ││CPU                               3.7%│
-# │ Claude Helper…   Claude 21354   ⠀⠀⠀⠀⢀    9.5%       684M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │ Claude Helper    Claude 21354   ⠀⠀⠀⠀⢀    8.5%       369M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │ agentmon…        claude 22602…  ⠀⠀⠀⠀⢀    4.7%        41M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │ Codex (Renderer) ChatGPT 2388   ⠀⠀⠀⠀⢀    3.9%       773M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │ Codex (Service)  ChatGPT 2388   ⠀⠀⠀⠀⢀    2.3%       383M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │ claude           claude 22602…  ⠀⠀⠀⠀⢀    1.6%       261M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │ ChatGPT          ChatGPT 2388   ⠀⠀⠀⠀⢀    1.2%       329M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀│
-# │ Claude Helper…   Claude 21354   ⠀⠀⠀⠀⢀    1.2%       178M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀│
-# │ Claude           Claude 21354   ⠀⠀⠀⠀⢀    1.2%       260M ││footprint                         5.4G│
-# │ Claude Helper    Claude 21354   ⠀⠀⠀⠀⢀    0.7%        10M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │ claude           claude 22034…  ⠀⠀⠀⠀⢀    0.4%       171M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │ Codex (Renderer) ChatGPT 2388   ⠀⠀⠀⠀⢀    0.4%       276M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │ claude           claude 26329…  ⠀⠀⠀⠀⢀    0.3%       187M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │ Codex (Renderer) ChatGPT 2388   ⠀⠀⠀⠀⢀    0.3%       226M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │ Codex (Service)  ChatGPT 2388   ⠀⠀⠀⠀⢀    0.2%        53M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │ bare-modifier…   ChatGPT 2388   ⠀⠀⠀⠀⢀    0.1%       7.6M ││⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸│
-# │ Claude Helper    Claude 21354   ⠀⠀⠀⠀⢀    0.1%        25M ││ Session           CPU▼  Footprint    │
-# │ codex            codex 3064…    ⠀⠀⠀⠀⢀    0.0%        17M ││ Claude 21354     21.1%       2.0G    │
-# │ codex            codex 2903     ⠀⠀⠀⠀⢀    0.0%       134M ││ ChatGPT 2388      8.4%       2.6G    │
-# │ Claude Helper    Claude 21354   ⠀⠀⠀⠀⢀    0.0%        22M ││ claude 22602…     6.4%       306M    │
-# │ Claude Helper    Claude 21354   ⠀⠀⠀⠀⢀    0.0%        19M ││ claude 22034…     0.4%       171M    │
-# │ Claude Helper    Claude 21354   ⠀⠀⠀⠀⢀    0.0%        20M ││ claude 26329…     0.3%       187M    │
-# │ Claude Helper    Claude 21354   ⠀⠀⠀⠀⢀    0.0%       117M ││ codex 3064…       0.0%        75M    │
-# │ Claude Helper…   Claude 21354   ⠀⠀⠀⠀⢀    0.0%        26M ││ codex 2903        0.0%       143M    │
-# │ node_repl        codex 3064…    ⠀⠀⠀⠀⢀    0.0%       8.1M ││                                      │
-# │ node             codex 3064…    ⠀⠀⠀⠀⢀    0.0%        15M ││                                      │
-# ╰──────────────────────────────────────────────────── 1/58 ╯╰──────────────────────────────────────╯
-#  sort: CPU▼       ? help  tab panel  [ ] scope  g group  s/S sort  / search  ⏎ fold  z zoom  q quit
+# visual: gauges, areas and heat, sessions first (docs/views.md). FRAME
 module Agentmon
   view :visual, title: "agentmon" do
+    # Home: the machine's breakdown, then every agent session.
     row height: 11 do
       panel :cpu, title: "CPU" do
         meter "system.cpu"
@@ -70,7 +18,7 @@ module Agentmon
         trend "memory.used", height: nil, label: "used, last 4 min"
       end
     end
-    row height: 9 do
+    row height: 8 do
       panel :network, title: "Network" do
         trend "system.net_in_rate", "system.net_out_rate", height: nil
       end
@@ -79,10 +27,40 @@ module Agentmon
       end
     end
     row do
-      top :process, span: 3, by: :cpu, columns: %i[name session cpu footprint], widths: { name: 16, session: 14 }
-      panel :session, title: "Sessions", span: 2 do
-        trend "focus.cpu", "focus.footprint", height: 0.65
-        top :session, by: :cpu, columns: %i[label cpu footprint], widths: { label: 14 }, spark: false
+      top :session, title: "Sessions", by: :cpu, spark: %i[cpu net_out_rate],
+                    columns: %i[label cpu footprint read_rate write_rate net_in_rate net_out_rate],
+                    widths: { label: 22 }
+    end
+
+    # Drilled into one session: its CPU, memory, network and disk, processes, connections.
+    focused do
+      row height: 11 do
+        panel :s_cpu, title: "CPU" do
+          meter "focus.cpu"
+          trend "focus.cpu", height: nil, label: "last 4 min"
+          stat "focus.processes", "focus.read_rate", "focus.write_rate", columns: 3
+        end
+        panel :s_memory, title: "Memory" do
+          meter "focus.footprint"
+          stat "focus.resident", "focus.wired", "focus.growth_rate", "focus.pagein_rate", columns: 2
+          trend "focus.footprint", height: nil, label: "footprint, last 4 min"
+        end
+      end
+      row height: 8 do
+        panel :s_net, title: "Network" do
+          trend "focus.net_in_rate", "focus.net_out_rate", height: nil
+        end
+        panel :s_disk, title: "Disk" do
+          trend "focus.read_rate", "focus.write_rate", height: nil
+        end
+      end
+      row do
+        top :process, span: 3, by: :cpu, columns: %i[name cpu footprint net_out_rate], widths: { name: 20 }
+        detail :process, span: 2
+      end
+      row height: 8 do
+        top :connection, title: "Connections", by: :out_rate, spark: false, widths: { process: 18 },
+                         columns: %i[process remote_text state in_rate out_rate bytes_in bytes_out]
       end
     end
   end
