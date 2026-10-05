@@ -132,7 +132,7 @@ class SessionsPanelTest < Minitest::Test
       assert_equal %i[label processes cpu footprint peak_footprint cpu_seconds bytes_written read_rate write_rate age],
                    default
       R2UI.reset!
-      dashboard_app(view: :dense)
+      dashboard_app(view: :dense, focus: nil) # dense opens on Sessions; :process is a drill-down
       cols = R2UI.registry.resource(:session).columns.to_h { |c| [c.key, [c.label, c.format]] }
 
       assert_equal({ net_in_rate: ["Net in", :bytes_per_sec], net_out_rate: ["Net out", :bytes_per_sec],
