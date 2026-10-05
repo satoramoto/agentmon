@@ -62,8 +62,10 @@ between samples. The gutter marks don't keep frames going on their own (a proces
 on nearly every sample, which would mean 20 fps forever): they fade with the burst's frames and go
 at the next sample. `--no-motion` (and `AGENTMON_MOTION=0`) turns it off.
 
-Cost (agentmon's own CPU, 100×50, 20 s in a pty, this Mac): default dashboard 3.8%; dense 10.6%
-/ 4.4% (motion / `--no-motion`), focus 14.2% / 5.8%, visual 14.3% / 6.3%. A frame costs ~16 ms in
+Cost (agentmon's own CPU, 100×50, 20 s after a 5 s warm-up in a pty, this Mac, with motion):
+dense 9.1% (7.7% before the sessions-first rework), visual 9.4% (12.1% before), plus nettop's
+own 1.2–1.7% for per-session network. Earlier: default dashboard 3.8%; dense 10.6% / 4.4% (motion /
+`--no-motion`), visual 14.3% / 6.3%. A frame costs ~16 ms in
 r2ui (`Canvas#write_ansi` measures every character's width; the bubbletea renderer rewrites every
 line every frame), so motion costs ~3 frames' worth per sample; the drawn strings are cached
 (braille areas per series, headers per pulse level) so agentmon's own share is small.
@@ -165,7 +167,7 @@ draws its first lines; it never wraps.
 ## Running a view
 
 ```
-agentmon --layout visual        # one of dense, focus, visual (the registered views)
+agentmon --layout visual        # one of dense, visual (the registered views)
 agentmon --layout visual | cat  # one plain frame, for tests and reviews
 agentmon --no-motion            # no animation (also AGENTMON_MOTION=0)
 ```
@@ -179,36 +181,47 @@ drawers, in `lib/agentmon/views.rb` + `lib/agentmon/views/*.rb`; tests in `test/
 Testing: `test/support/dashboard.rb` gets `dashboard_app(view: :visual)` and frames are taken at
 **100×50** for the three layouts (the owner's window), beside the default 200×50.
 
-## The three directions (all 100×50, nothing wrapped or cut mid-word, no empty rows of panels)
+## The two directions (all 100×50, nothing wrapped or cut mid-word, no empty rows of panels)
 
 Each is one file, `lib/agentmon/views/<name>.rb`, written in the DSL above and nothing else (if a
-layout needs a word the DSL lacks, add the word to the DSL, not a one-off `view {}` block).
+layout needs a word the DSL lacks, add the word to the DSL, not a one-off `view {}` block). Both
+are sessions first: home is the session list (the biggest panel, sorted by CPU, keys on it), with
+no all-processes table; Enter on a session (or F on a process) drills into it with `focused`, and
+Escape returns. The machine breakdown stays on the home screen. The all-processes list is still one
+key away: drill into a session and press `[`/`]` for the Processes table's All scope.
 
-**dense** — htop-like, everything on one screen, no side pane.
-Rows: a 4-line machine strip in three panels (CPU: `spark` CPU and user, `stat` load 1/5/15 and
+The focus layout (a band of session tiles over the focused session) is gone: its content is now
+every layout's drill-down, and its band duplicated the session list. The `band` word stays.
+
+**dense** — htop-like. Home: a 4-line machine strip (CPU: `spark` CPU and user, `stat` load and
 cores; Memory: `spark` used, pressure, swap, compressed; I/O: `spark` net in/out, disk read/write),
-a 9-line Sessions table (`top :session` with label, procs, CPU, footprint, age), the Processes
-table taking the rest (`top :process` with pid, name, session, CPU, footprint, wait, pgin/s, read,
-write, no sort sparkline so all nine fit at 100 columns; columns drop by priority as the width
-shrinks), and a 7-line `detail :process, columns: 3` drawer at the bottom. Keys as today
-(Enter/F/esc for focus work on the Sessions table).
+the Sessions table taking the rest (`top :session` with label, procs, CPU, footprint, disk read and
+write, net in and out; braille sparklines on CPU and net out, `spark: %i[cpu net_out_rate]`), and an
+8-line all-agents strip (procs, resident, CPU and footprint `trend`s; remote hosts, connections and
+net in/out `trend`s). Drilled in: a 5-line strip of the session's CPU (CPU, disk read/write
+`spark`s, procs), Memory (footprint `meter` of machine used, footprint `spark`, resident, wired,
+growth, pageins) and Network (net in/out `spark`s, received, sent, hosts, connections); its
+Processes (`top :process` with pid, name, CPU, footprint, wait, read, write, net in, net out); a
+9-line Connections table; a 7-line `detail :process, columns: 3` drawer.
 
-**focus** — session-first. A 7-line `band :session` across the top; under it, for the focused
-session (or all agent sessions together when none, so the machine state is never empty): a 9-line
-row with the session's memory (`meter` footprint of machine used, `stat` resident, wired, growth,
-pageins/s, a footprint `trend`) beside its CPU (`stat` procs, read, write and a CPU `trend`); then
-its processes (`top :process` with name, cpu, footprint, wait) beside `detail :process` with the
-session's read and write `trend`s under it (span 3:2). The band shows which session is focused;
-Escape returns to the machine.
+**visual** — gauges, areas and heat. Home: CPU `meter` + `trend` + load beside Memory `meter`s +
+`stat` + used `trend` (11 lines); Network and Disk `trend`s (8 lines); the Sessions table (label,
+CPU, footprint, read, write, net in, net out; sparklines on CPU and net out); an all-agents row of
+CPU/footprint and net in/out `trend`s (10 lines). Drilled in: the session's CPU `meter` + `trend` +
+procs/read/write beside its footprint `meter` + memory `stat` + footprint `trend`; its Network and
+Disk `trend`s; its processes (name, CPU, footprint, net out) beside the process `detail` (span
+3:2); an 8-line Connections table.
 
-**visual** — gauges, areas and heat. Top row (11 lines): CPU `meter` + `trend` + load `stat`
-beside Memory `meter` used/total, pressure, swap + `stat` + a used `trend`. Middle row (9 lines):
-Network `trend` in/out beside Disk `trend` read/write. Bottom: `top :process` (fills the panel)
-with name, session, cpu (heat + braille), footprint, beside a Sessions panel: all agents' CPU and
-footprint `trend`s (`height: 0.65`) over a `top :session` with label, cpu, footprint (span 3:2).
-Heat colours everywhere a fraction exists; the accent for bytes.
+Each layout's file starts with a comment showing its home frame (the real one, from `| cat`).
 
-Each layout's file starts with a comment showing its frame (the real one, from `| cat`).
+**Network data.** One long-lived `nettop -x -L 0 -s 1 -J interface,state,bytes_in,bytes_out`
+child under a pty (piped, nettop block-buffers) streams every process's sockets once a second; a
+reader thread parses each block into a `NetSnapshot` (lib/agentmon/probes/network.rb) and the probe
+returns the latest. Connection mode (no `-P`) lists each process's line and its flows, so the
+per-process totals and the per-connection rows come from the same stream. The child is killed on
+quit, ctrl+c, exceptions and one-frame `| cat` runs (`at_exit`), dies with the pty if agentmon is
+killed, and is restarted (at most every 10 s) if it dies; without nettop the network values are
+unknown and the rest works. Cost on this Mac: nettop 1.2–1.7% of one core; a probe call ~2 µs.
 
 ## r2ui needs (prototyped on r2ui's `proto/design-directions`, listed for the real r2ui stories)
 
