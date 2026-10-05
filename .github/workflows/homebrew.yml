@@ -1,10 +1,10 @@
 name: Homebrew
 
 # After Publish puts a release on RubyGems, points the agentmon formula in satoramoto/homebrew-tap
-# at it: agentmon's .gem and the newest RubyGems versions of the gems it depends on (r2ui, fiddle),
-# with their sha256s. Then it installs the formula from source, runs `brew test` and
-# `brew audit --strict` on macOS, and only then pushes the tap. Run it by hand (Actions → Homebrew
-# → Run workflow) to retry, or to pick up a new r2ui without an agentmon release.
+# at it: agentmon's .gem and the newest RubyGems versions its gemspec allows of the gems it depends
+# on (r2ui, fiddle), with their sha256s. Then it installs the formula from source, runs `brew test`
+# and `brew audit --strict` on macOS, and only then pushes the tap. The formula changes only with an
+# agentmon release. Run it by hand (Actions → Homebrew → Run workflow) to retry.
 #
 # Needs the TAP_TOKEN secret: a fine-grained token with Contents read/write on
 # satoramoto/homebrew-tap. See docs/releasing.md.

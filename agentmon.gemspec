@@ -32,5 +32,5 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency "fiddle", "~> 1.1" # a default gem until Ruby 3.5, which drops it
-  spec.add_dependency "r2ui", "~> 0.2"
+  spec.add_dependency "r2ui", "~> 0.2.0" # a new r2ui minor arrives as a Dependabot PR
 end

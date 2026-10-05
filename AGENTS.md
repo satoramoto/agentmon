@@ -15,7 +15,7 @@ Tests run on fixtures (`test/support/fixtures.rb`); only `test/live/*_test.rb` r
 
 CI (`.github/workflows/ci.yml`, macos-latest) is the final check.
 
-The Gemfile uses the sibling r2ui checkout when present (`../r2ui` from the main checkout, `../../r2ui` from a worktree in `agentmon-wt/<id>/`), else r2ui's `main` on GitHub. Don't change r2ui from this repo; report what you need from it.
+agentmon builds on released r2ui only: the gemspec's `r2ui ~> 0.2.0` from RubyGems, in CI and locally. A new r2ui minor arrives as a Dependabot PR; taking it is agentmon's call. To try an unreleased r2ui locally, set `R2UI_PATH` (`R2UI_PATH=../r2ui bundle exec rake test`; `../../r2ui` from a worktree in `agentmon-wt/<id>/`), but don't merge code that needs it. Don't change r2ui from this repo; report what you need from it.
 
 ## Factory
 

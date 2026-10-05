@@ -34,8 +34,8 @@ When Publish succeeds, `.github/workflows/homebrew.yml` updates the Homebrew for
 `Formula/agentmon.rb` at the new `.gem` and the newest r2ui and fiddle the gemspec allows (url and
 sha256 from RubyGems), installs it from source, runs `brew test` and `brew audit --strict` on
 macOS, and pushes the tap. If it fails, nothing is pushed; fix it and run the workflow by hand
-(Actions → Homebrew → Run workflow, optionally with a version). Run it by hand too after an r2ui
-release to move the formula to it. A new runtime dependency fails the workflow until its
+(Actions → Homebrew → Run workflow, optionally with a version). The formula changes only with an
+agentmon release: a new r2ui reaches it through a Dependabot PR and the next release. A new runtime dependency fails the workflow until its
 `resource` block is added to the formula by hand.
 
 ## When something fails
