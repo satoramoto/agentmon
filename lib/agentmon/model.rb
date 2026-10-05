@@ -78,7 +78,21 @@ module Agentmon
   # metrics/sessions.rb: who an agent session is. `kind` is :cli (an outermost claude/codex CLI
   # process) or :app (a desktop app and all its helpers). `id` is stable across agentmon runs:
   # "claude-4242-1790711088" (name, root pid, root start second).
-  SessionInfo = Data.define(:id, :kind, :name, :root_pid, :label, :cwd, :started_at)
+  # `label` is the one display string every consumer shows and searches: "claude 4242 · repo", or
+  # with a human name "Agentmon r2ui integration · claude 4242 · repo" (name first, so a table
+  # cut at a word boundary keeps it). `title`, `status`, `threads` come from SessionName (nil/[]
+  # when unknown).
+  SessionInfo = Data.define(:id, :kind, :name, :root_pid, :label, :cwd, :started_at, :title, :status, :threads) do
+    def initialize(title: nil, status: nil, threads: [], **) = super
+  end
+
+  # metrics/session_names.rb output, per session root pid: what the agent itself calls the session.
+  SessionName = Data.define(
+    :title,   # String: the session's name ("Agentmon r2ui integration"); for a codex process hosting
+              # several threads, its newest named thread plus " +N" for N more open threads; nil unknown
+    :status,  # "busy" / "idle" from Claude Code's session file; nil for codex or unknown
+    :threads  # Array of String: a codex process's open threads' names, newest first ([] for Claude)
+  )
 
   # metrics/sessions.rb output: the sessions alive in this sample and which one each pid is in.
   SessionMap = Data.define(:sessions, :by_pid) do
@@ -102,8 +116,13 @@ module Agentmon
     :peak_footprint,  # max footprint seen over its life (bytes)
     :cpu_seconds,     # CPU seconds over its life, reaped children included (see design.md)
     :bytes_read,      # disk bytes read by members while observed (a lower bound)
-    :bytes_written    # disk bytes written by members while observed (a lower bound)
+    :bytes_written,   # disk bytes written by members while observed (a lower bound)
+    # From the latest SessionInfo (SessionName): human name, Claude's "busy"/"idle", codex thread
+    # names newest first. nil/[] when unknown.
+    :title, :status, :threads
   ) do
+    def initialize(title: nil, status: nil, threads: [], **) = super
+
     def alive? = ended_at.nil?
 
     def duration = (ended_at || last_seen_at) - (started_at || first_seen_at)

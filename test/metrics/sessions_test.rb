@@ -23,6 +23,36 @@ class SessionsMetricTest < Minitest::Test
     assert_equal "/Users/me/src/repo", s.cwd
   end
 
+  def named(names) = Fixtures.reading(machine, values: { session_names: names })[:sessions]
+
+  def test_a_name_leads_the_label
+    name = Agentmon::SessionName.new(title: "Agentmon r2ui integration", status: "busy", threads: [])
+    s = named({ 200 => name, 300 => Agentmon::SessionName.new(title: "Chat +1", status: nil, threads: %w[Chat Other]) })
+
+    assert_equal "Agentmon r2ui integration · claude 200 · repo", s.of(200).label
+    assert_equal ["Agentmon r2ui integration", "busy", []], [s.of(200).title, s.of(200).status, s.of(200).threads]
+    assert_equal "Chat +1 · Claude 300", s.of(300).label
+    assert_equal %w[Chat Other], s.of(300).threads
+    assert_equal "claude 303 · web", s.of(303).label # no name: today's label
+    assert_nil s.of(303).title
+  end
+
+  def test_a_status_without_a_name_keeps_the_label
+    s = named({ 200 => Agentmon::SessionName.new(title: nil, status: "idle", threads: []) }).of(200)
+
+    assert_equal ["claude 200 · repo", "idle"], [s.label, s.status]
+  end
+
+  def test_focus_find_and_the_sessions_filter_match_a_name
+    names = { 200 => Agentmon::SessionName.new(title: "Agentmon r2ui integration", status: nil, threads: []) }
+    ledger = Fixtures.reading(machine, values: { session_names: names }).then do |reading|
+      Agentmon::Metrics::SessionLedger.new({}).call(reading)
+    end
+
+    assert_equal [200], Agentmon::Focus.find(ledger, "r2ui INTEG").map(&:root_pid)
+    assert_empty Agentmon::Focus.find(ledger, "nothing like it")
+  end
+
   def test_desktop_app_helpers_are_one_app_session
     app = map.of(301)
 

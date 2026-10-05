@@ -16,9 +16,11 @@ module Agentmon
 
       module_function
 
-      def call(processes, cwds)
+      # `names`: reading[:session_names], { root pid => SessionName } (nil or {} when unknown).
+      def call(processes, cwds, names = {})
         processes ||= []
         cwds ||= {}
+        names ||= {}
         by_pid = processes.to_h { |p| [p.pid, p] }
         chains = {}
         sessions = {}
@@ -28,7 +30,7 @@ module Agentmon
           root = cli || app
           next unless root
 
-          info = sessions[root.pid] ||= info(root, cli ? :cli : :app, cwds)
+          info = sessions[root.pid] ||= info(root, cli ? :cli : :app, cwds, names[root.pid])
           map[p.pid] = info.id
         end
         SessionMap.new(sessions: sessions.values, by_pid: map)
@@ -54,7 +56,9 @@ module Agentmon
         memo[process.pid]
       end
 
-      def info(root, kind, cwds)
+      # Label: "claude 4242 · repo" (directory of a CLI root), "Claude 300" (app); with a human
+      # name first: "Agentmon r2ui integration · claude 4242 · repo".
+      def info(root, kind, cwds, name = nil)
         cwd = cwds[root.pid]
         id = [root.name, root.pid, root.started_at&.to_i].compact.join("-")
         label = if kind == :cli && cwd && cwd != "/"
@@ -62,10 +66,15 @@ module Agentmon
                 else
                   "#{root.name} #{root.pid}"
                 end
-        SessionInfo.new(id:, kind:, name: root.name, root_pid: root.pid, label:, cwd:, started_at: root.started_at)
+        title = name&.title
+        label = "#{title} · #{label}" if title && !title.empty?
+        SessionInfo.new(id:, kind:, name: root.name, root_pid: root.pid, label:, cwd:, started_at: root.started_at,
+                        title:, status: name&.status, threads: name&.threads || [])
       end
     end
   end
 
-  metric(:sessions) { |reading| Metrics::Sessions.call(reading.sample[:processes], reading.sample[:cwd]) }
+  metric(:sessions) do |reading|
+    Metrics::Sessions.call(reading.sample[:processes], reading.sample[:cwd], reading[:session_names])
+  end
 end

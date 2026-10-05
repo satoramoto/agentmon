@@ -22,6 +22,35 @@ class TopCommandTest < Minitest::Test
     refute_includes result.out, "\e[" # plain in a pipe
   end
 
+  def test_a_long_session_name_is_cut_at_a_word_to_fit_the_width
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "200.json"), '{"name":"Agentmon r2ui integration with a long name"}')
+      Agentmon::Metrics::SessionNames.claude_dir = dir
+      result = with_engine(Fixtures.engine(machine(0), machine(2))) do
+        run_cli(Agentmon::Program.build, "top", "--once", width: 100)
+      end
+
+      assert result.out.lines.all? { |l| l.chomp.size <= 100 }, result.out
+      assert_match(/\A200\s+claude\s+Agentmon r2ui( \w+)*…\s+100\.0%/, result.out.lines[1])
+    ensure
+      Agentmon::Metrics::SessionNames.claude_dir = NO_NAMES_DIR
+    end
+  end
+
+  def test_the_live_view_cuts_the_session_not_the_columns_after_it
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "200.json"), '{"name":"Agentmon r2ui integration with a long name"}')
+      Agentmon::Metrics::SessionNames.claude_dir = dir
+      rows = with_engine(Fixtures.engine(machine(0), machine(2))) { |e| e.current[:process_rows].select(&:session) }
+      lines = Agentmon::Commands::Top.lines(rows, 100)
+
+      assert lines.all? { |l| l.size <= 100 }, lines.join("\n")
+      assert_match(%r{Agentmon r2ui( \w+)*…\s+100\.0%\s+512M\s+600M\s+0B/s\s+1000B/s\z}, lines.find { |l| l.start_with?("200 ") })
+    ensure
+      Agentmon::Metrics::SessionNames.claude_dir = NO_NAMES_DIR
+    end
+  end
+
   def test_all_includes_every_process_and_unknowns_are_blank
     result = top("--once", "--all", "--limit", "20")
 

@@ -5,8 +5,8 @@ require "fiddle"
 module Agentmon
   # macOS kernel data through Fiddle, without subprocesses: per-process resource usage
   # (proc_pid_rusage, RUSAGE_INFO_V4), process start time plus fault and scheduling counters
-  # (proc_pidinfo PROC_PIDTASKALLINFO; PROC_PIDTBSDINFO for the start time alone) and the Mach
-  # clock (mach_timebase_info).
+  # (proc_pidinfo PROC_PIDTASKALLINFO; PROC_PIDTBSDINFO for the start time alone), open file paths
+  # (PROC_PIDLISTFDS + proc_pidfdinfo) and the Mach clock (mach_timebase_info).
   #
   # Units: CPU times come from the kernel in Mach absolute-time ticks. On Intel a tick is 1 ns; on
   # Apple Silicon it is 125/3 ns (41.67 ns), so ticks are always converted with the timebase and
@@ -38,6 +38,17 @@ module Agentmon
       proc_start_abstime: 8, child_user_time: 10, child_system_time: 11, diskio_bytesread: 16,
       diskio_byteswritten: 17, lifetime_max_phys_footprint: 28, runnable_time: 34
     }.freeze
+
+    # Open files (bsd/sys/proc_info.h). proc_pidinfo(PROC_PIDLISTFDS) fills struct proc_fdinfo
+    # entries {int32 proc_fd; uint32 proc_fdtype}; proc_pidfdinfo(PROC_PIDFDVNODEPATHINFO) fills a
+    # struct vnode_fdinfowithpath: proc_fileinfo (24 bytes) + vnode_info (vinfo_stat 136 + vi_type,
+    # vi_pad, vi_fsid = 152 bytes), then vip_path[MAXPATHLEN = 1024], NUL-terminated, at 176.
+    PROC_PIDLISTFDS = 1
+    PROC_PIDFDVNODEPATHINFO = 2
+    PROX_FDTYPE_VNODE = 1
+    FDINFO_SIZE = 8
+    VNODE_PATH_OFFSET = 24 + 152
+    VNODE_PATH_SIZE = VNODE_PATH_OFFSET + 1024
 
     EPERM = 1
     ESRCH = 3
@@ -135,6 +146,41 @@ module Agentmon
                      context_switches: c[:csw], threads: c[:threadnum], running_threads: c[:numrunning])
       end
 
+      # Paths (Strings) of `pid`'s open vnode files (regular files, directories, devices), or nil
+      # when its descriptors can't be listed (another user's process, exited). One
+      # proc_pidinfo(PROC_PIDLISTFDS) call plus one proc_pidfdinfo per vnode descriptor; a
+      # descriptor closed in between is skipped.
+      def open_paths(pid)
+        size = functions[:pidinfo].call(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        return fail_with(Fiddle.last_error) unless size.positive?
+
+        size += 32 * FDINFO_SIZE # room for descriptors opened between the two calls
+        list = Fiddle::Pointer.malloc(size, Fiddle::RUBY_FREE)
+        filled = functions[:pidinfo].call(pid, PROC_PIDLISTFDS, 0, list, size)
+        return fail_with(Fiddle.last_error) unless filled.positive?
+
+        Thread.current[:agentmon_errno] = 0
+        buffer = Fiddle::Pointer.malloc(VNODE_PATH_SIZE, Fiddle::RUBY_FREE)
+        decode_fdinfo_list(list[0, filled]).filter_map do |fd, type|
+          next unless type == PROX_FDTYPE_VNODE
+          next unless functions[:pidfdinfo].call(pid, fd, PROC_PIDFDVNODEPATHINFO, buffer, VNODE_PATH_SIZE) == VNODE_PATH_SIZE
+
+          path = decode_vnode_path(buffer[0, VNODE_PATH_SIZE])
+          path unless path.empty?
+        end
+      end
+
+      # [[fd, fdtype], ...] from the struct proc_fdinfo array PROC_PIDLISTFDS wrote. Public for tests.
+      def decode_fdinfo_list(bytes)
+        bytes.byteslice(0, bytes.bytesize - (bytes.bytesize % FDINFO_SIZE)).unpack("l<L<" * (bytes.bytesize / FDINFO_SIZE))
+             .each_slice(2).to_a
+      end
+
+      # vip_path of a struct vnode_fdinfowithpath, as a UTF-8 String ("" when empty). Public for tests.
+      def decode_vnode_path(bytes)
+        bytes.byteslice(VNODE_PATH_OFFSET, 1024).to_s.unpack1("Z*").force_encoding(Encoding::UTF_8).scrub
+      end
+
       # errno of the last failed read on this thread (EPERM, ESRCH, ...), 0 after a success.
       def errno = Thread.current[:agentmon_errno] || 0
 
@@ -176,6 +222,10 @@ module Agentmon
             pidinfo: Fiddle::Function.new(lib["proc_pidinfo"],
                                           [Fiddle::TYPE_INT, Fiddle::TYPE_INT, uint64, Fiddle::TYPE_VOIDP, Fiddle::TYPE_INT],
                                           Fiddle::TYPE_INT),
+            pidfdinfo: Fiddle::Function.new(lib["proc_pidfdinfo"],
+                                            [Fiddle::TYPE_INT, Fiddle::TYPE_INT, Fiddle::TYPE_INT, Fiddle::TYPE_VOIDP,
+                                             Fiddle::TYPE_INT],
+                                            Fiddle::TYPE_INT),
             timebase: Fiddle::Function.new(lib["mach_timebase_info"], [Fiddle::TYPE_VOIDP], Fiddle::TYPE_INT)
           }
         end

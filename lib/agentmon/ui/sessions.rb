@@ -37,6 +37,8 @@ module Agentmon
           alive: session.alive?,
           label: ended ? "#{session.label} · ended #{age(now - ended)} ago" : session.label,
           cwd: session.cwd,
+          title: session.title,   # human name (also at the front of label); nil when unknown
+          status: session.status, # Claude Code's "busy"/"idle"; nil when unknown
           processes: session.processes,
           cpu: session.cpu,
           footprint: session.footprint,

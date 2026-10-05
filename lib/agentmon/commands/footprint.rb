@@ -68,7 +68,9 @@ module Agentmon
       elsif rows.empty?
         shell.puts(list::EMPTY)
       else
-        table(rows.map { |m| list.cells(m) }, headers: list::HEADERS, align: list::RIGHT)
+        cells = Commands::SessionList.fit(rows.map { |m| list.cells(m) }, list::HEADERS, width: shell.width,
+                                                                                         boxed: shell.live?)
+        table(cells, headers: list::HEADERS, align: list::RIGHT)
         if (line = list.machine(reading[:memory]))
           shell.puts
           shell.puts(line)

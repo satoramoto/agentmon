@@ -27,6 +27,23 @@ class SessionLedgerMetricTest < Minitest::Test
     assert_equal 4, s.processes
   end
 
+  def test_a_name_that_arrives_later_shows_up_and_is_recorded
+    Dir.mktmpdir do |dir|
+      Agentmon::Metrics::SessionNames.claude_dir = dir
+      engine = Fixtures.engine(machine(0), machine(2), machine(12))
+      engine.tick! # first refresh: no file yet
+      File.write(File.join(dir, "200.json"), '{"name":"Later","status":"idle"}')
+      before = engine.tick![:session_ledger].find { |s| s.root_pid == 200 } # 2 s later: not refreshed
+      after = engine.tick![:session_ledger].find { |s| s.root_pid == 200 }  # 12 s: refreshed
+
+      assert_equal ["claude 200 · repo", nil, []], [before.label, before.title, before.threads]
+      assert_equal ["Later · claude 200 · repo", "Later", "idle"], [after.label, after.title, after.status]
+      assert_equal ["Later", "idle", []], after.to_record.values_at(:title, :status, :threads)
+    ensure
+      Agentmon::Metrics::SessionNames.claude_dir = NO_NAMES_DIR
+    end
+  end
+
   def test_growth_adds_up
     assert_in_delta 15.6, ledger(machine(0), machine(2))[200].cpu_seconds # claude +2, node +1
   end

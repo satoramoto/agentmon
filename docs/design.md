@@ -64,7 +64,9 @@ can be built at once and merged in any order.
 Sampling cost per tick: one `ps` and two Fiddle calls per process (`proc_pid_rusage` v4,
 `proc_pidinfo(PROC_PIDTASKALLINFO)`): the `processes` probe takes ~50 ms for 800 processes on an
 M-series Mac (~12 ms of it Fiddle), a whole engine tick with every metric ~57 ms; plus `lsof`
-(~0.4 s) every 10 s. No subprocess per process, ever.
+(~0.4 s) every 10 s; plus session names (`session_names`) every 10 s: ~2 ms cold, <1 ms warm
+(stat of each Claude session file, the appended tail of codex's index, one open-file listing per
+codex process). No subprocess per process, ever.
 
 ### Files
 
@@ -108,6 +110,7 @@ All shapes live in `lib/agentmon/model.rb`. Units everywhere:
 | `{ pid => path }` | probe `cwd` | lsof, every 10 s |
 | `MemoryStat` | probe `memory` (a01) | counters cumulative since boot, in bytes |
 | `ProcessRates` per pid | metric `process_rates` | deltas only between matching identities |
+| `{ pid => SessionName }` | metric `session_names` | human name, Claude status, codex thread names of CLI roots; refreshed every 10 s |
 | `SessionMap` of `SessionInfo` | metric `sessions` | attribution, below |
 | `[Session]` | metric `session_ledger` | alive and recently ended sessions with lifetime totals |
 | `[ProcessRow]` | metric `process_rows` | what tables show |
@@ -126,7 +129,16 @@ per tick), so it's left out.
 with none, to its topmost desktop app ancestor (Claude, ChatGPT/Codex). Claude Code sessions the
 desktop app launches are CLI sessions of their own. Session ids are stable across agentmon runs:
 `claude-4242-1790711088` (name, root pid, root start second). Labels: `claude 4242 · repo`
-(directory of the root), `Claude 59334` for apps.
+(directory of the root), `Claude 59334` for apps, and with a known human name it leads:
+`Agentmon r2ui integration · claude 4242 · repo`, so a table cut at a word keeps the name and `/`
+search, `top --session` and `Focus.find` match it. `label` is the one display string; `title`,
+`status`, `threads` (SessionInfo, Session) carry the parts. Names (`metrics/session_names.rb`,
+refreshed every 10 s, never a subprocess): Claude Code's `~/.claude/sessions/<pid>.json` (`name`,
+`status` busy/idle; re-parsed only when its mtime changes); for a `codex` process, the rollout
+files it holds open (`$CODEX_HOME/sessions/.../rollout-<time>-<thread id>.jsonl`, via
+`Darwin.open_paths`) named by `$CODEX_HOME/session_index.jsonl` (read incrementally): the newest
+named thread plus " +N" for its other open threads. Unreadable or garbled files: no name. CLI
+tables (`sessions`, `footprint`, `top`) cut the label at a word to fit the width.
 
 **Lifetime totals** (`metrics/session_ledger.rb` has the full reasoning):
 - `cpu_seconds` adds each member's growth of own + reaped-children CPU time, so short-lived tools

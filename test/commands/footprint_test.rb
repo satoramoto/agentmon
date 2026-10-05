@@ -49,6 +49,20 @@ class FootprintCommandTest < Minitest::Test
     refute_includes result.out, "\e[" # plain in a pipe
   end
 
+  def test_a_long_name_is_cut_at_a_word_to_fit_the_width
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "200.json"), JSON.generate({ name: "Agentmon r2ui integration with a long name" }))
+      Agentmon::Metrics::SessionNames.claude_dir = dir
+      [footprint(width: 100), footprint(tty: true, width: 100)].each do |result|
+        assert result.success?, result.err
+        assert result.out.lines.all? { |l| R2UI::CLI::Ext::Tabulate.width(l.chomp) <= 100 }, result.out
+        assert_match(/Agentmon r2ui( \w+)*…/, result.out)
+      end
+    ensure
+      Agentmon::Metrics::SessionNames.claude_dir = NO_NAMES_DIR
+    end
+  end
+
   def test_a_terminal_gets_a_boxed_table
     result = footprint(tty: true, width: 140)
 

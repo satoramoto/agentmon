@@ -74,6 +74,29 @@ class SessionsPanelTest < Minitest::Test
     end
   end
 
+  def test_a_named_session_leads_with_its_name_and_search_finds_it
+    names = Agentmon::Metrics::SessionNames
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "200.json"), '{"pid":200,"name":"Agentmon r2ui integration","status":"busy"}')
+      names.claude_dir = dir
+      with_engine(prime(Fixtures.engine(machine(0), machine(2)))) do |engine|
+        a = app
+        row = Agentmon::UI::SessionsPanel.rows(engine.current).find { |r| r[:id].start_with?("claude-200") }
+
+        assert_equal ["Agentmon r2ui integration", "busy"], [row[:title], row[:status]]
+        assert_includes frame(a).join("\n"), "Agentmon r2ui integration · claude 200 · repo"
+
+        a.press("/", *"r2ui".chars, "enter")
+        found = frame(a).join("\n")
+
+        assert_includes found, "Agentmon r2ui integration"
+        refute_includes found, "claude 303"
+      end
+    ensure
+      names.claude_dir = NO_NAMES_DIR
+    end
+  end
+
   def test_no_ledger_shows_an_empty_panel
     registry = Agentmon::Registry.new
     Agentmon.registry.metrics.reject { |m| m.name == :session_ledger }.each { |m| registry.add(:metric, m) }

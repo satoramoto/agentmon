@@ -91,6 +91,25 @@ class DarwinCoreTest < Minitest::Test
     assert_equal [3, 1234, 12, 2], [info.cow_faults, info.context_switches, info.threads, info.running_threads]
   end
 
+  def test_decodes_the_fd_list
+    bytes = [0, 1, 1, 1, 7, 2, 12, 1].pack("l<L<l<L<l<L<l<L<") + "\x00\x00".b # a partial trailing entry is ignored
+
+    assert_equal [[0, 1], [1, 1], [7, 2], [12, 1]], Agentmon::Darwin.decode_fdinfo_list(bytes)
+    assert_empty Agentmon::Darwin.decode_fdinfo_list("".b)
+  end
+
+  # struct vnode_fdinfowithpath: proc_fileinfo (24) + vnode_info (vinfo_stat 136 + 4 + 4 + fsid 8),
+  # then vip_path[1024] at 176 (xnu bsd/sys/proc_info.h), written out by hand.
+  def test_decodes_the_vnode_path_at_the_kernel_offset
+    assert_equal 1200, Agentmon::Darwin::VNODE_PATH_SIZE
+    bytes = ("\xFF".b * 176) + ("\x00".b * 1024)
+    path = "/Users/me/.codex/sessions/2026/10/04/rollout-é.jsonl"
+    bytes[176, path.bytesize] = path.b
+
+    assert_equal path, Agentmon::Darwin.decode_vnode_path(bytes)
+    assert_equal "", Agentmon::Darwin.decode_vnode_path(("\xFF".b * 176) + ("\x00".b * 1024))
+  end
+
   def test_sizes_and_io_are_bytes_and_start_is_raw_ticks
     usage = Agentmon::Darwin.decode_rusage(fields(resident_size: 100, phys_footprint: 200, lifetime_max_phys_footprint: 300,
                                                   diskio_bytesread: 400, diskio_byteswritten: 500, proc_start_abstime: 42))

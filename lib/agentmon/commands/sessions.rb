@@ -41,6 +41,37 @@ module Agentmon
       end
 
       def json(session) = JSON.generate(session.to_record)
+
+      # Narrowest a label is cut to, however many other columns there are: on a very narrow
+      # terminal (or a pipe without COLUMNS, 80) the table overflows rather than lose the label.
+      MIN_LABEL = 20
+
+      # `rows` (Arrays of Strings) with column `column` cut at a word boundary ("·", " ", ...) so
+      # the table r2ui draws fits `width`: r2ui's plain table never cuts and its boxed one wraps
+      # cells, so a long session name would overflow a pipe or wrap mid-word on a terminal.
+      # `boxed` is the terminal table: each cell padded by one space each side plus n+1 borders;
+      # plain columns are joined by two spaces. A cell's part matching `keep` (at its end) is kept
+      # whole and the rest cut. Used by sessions, footprint and top.
+      def fit(rows, headers, width:, boxed:, column: 0, keep: nil)
+        return rows if rows.empty?
+
+        measure = ->(text) { R2UI::CLI::Ext::Tabulate.width(text.to_s) }
+        others = headers.each_index.sum do |i|
+          i == column ? 0 : [measure[headers[i]], *rows.map { |r| measure[r[i]] }].max
+        end
+        n = headers.size
+        overhead = boxed ? (3 * n) + 1 : 2 * (n - 1)
+        room = [width - others - overhead, MIN_LABEL, measure[headers[column]]].max
+        rows.map do |row|
+          text = row[column].to_s
+          tail = (keep && text[keep]).to_s
+          head = text.delete_suffix(tail)
+          row.dup.tap { |r| r[column] = Views::Widgets.cut(head, [room - measure[tail], MIN_LABEL].max) + tail }
+        end
+      end
+
+      # The " · ended 3m ago" an ended session's label ends in: never cut.
+      ENDED = / · ended [^·]* ago\z/
     end
   end
 
@@ -58,7 +89,9 @@ module Agentmon
       elsif sessions.empty?
         shell.puts(list::EMPTY)
       else
-        table(sessions.map { |s| list.cells(s, reading.at) }, headers: list::HEADERS, align: list::RIGHT)
+        rows = list.fit(sessions.map { |s| list.cells(s, reading.at) }, list::HEADERS, width: shell.width,
+                                                                                      boxed: shell.live?, keep: list::ENDED)
+        table(rows, headers: list::HEADERS, align: list::RIGHT)
       end
     end
   end

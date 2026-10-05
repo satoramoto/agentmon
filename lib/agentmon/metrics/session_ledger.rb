@@ -149,7 +149,8 @@ module Agentmon
           started_at: info.started_at || account.first_seen_at, first_seen_at: account.first_seen_at,
           last_seen_at: account.last_seen_at, ended_at: account.ended_at,
           peak_footprint: account.peak_footprint, cpu_seconds: account.cpu_seconds,
-          bytes_read: account.bytes_read, bytes_written: account.bytes_written, **now
+          bytes_read: account.bytes_read, bytes_written: account.bytes_written,
+          title: info.title, status: info.status, threads: info.threads, **now
         )
       end
     end

@@ -18,6 +18,7 @@ module Agentmon
     module Top
       HEADERS = %w[PID Name Session CPU Footprint Resident Read Write].freeze
       RIGHT = [0, 3, 4, 5, 6, 7].freeze
+      SESSION = 2 # the column cut to fit the width (a session label can be a long human name)
       # Seconds between the live loop's own redraws (which surface a dead ticker's error).
       CHECK_EVERY = 1
       SORTS = { "cpu" => :cpu, "footprint" => :footprint, "resident" => :resident, "read" => :read_rate,
@@ -40,7 +41,8 @@ module Agentmon
 
       # Plain aligned lines (header first), cut to `width`: the live view.
       def lines(rows, width)
-        table = [HEADERS, *rows.map { |r| cells(r) }]
+        body = SessionList.fit(rows.map { |r| cells(r) }, HEADERS, width:, boxed: false, column: SESSION)
+        table = [HEADERS, *body]
         widths = table.transpose.map { |col| col.map(&:length).max }
         table.map do |cells|
           cells.each_with_index.map { |c, i| RIGHT.include?(i) ? c.rjust(widths[i]) : c.ljust(widths[i]) }
@@ -71,7 +73,9 @@ module Agentmon
         engine.focus = found.first.id
       end
       if options[:once] || !shell.live?
-        table(pick.call(engine.current).map { |r| top.cells(r) }, headers: top::HEADERS, align: top::RIGHT.to_h { |i| [i, :right] })
+        cells = Commands::SessionList.fit(pick.call(engine.current).map { |r| top.cells(r) }, top::HEADERS,
+                                          width: shell.width, boxed: shell.live?, column: top::SESSION)
+        table(cells, headers: top::HEADERS, align: top::RIGHT.to_h { |i| [i, :right] })
       else
         live = R2UI::CLI::Live.new(shell, fps: 2) { top.lines(pick.call(engine.current), shell.width).join("\n") }
         # `refresh` redraws on this thread: if the ticker died on a raising view, it raises that

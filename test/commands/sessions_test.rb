@@ -41,6 +41,45 @@ class SessionsCommandTest < Minitest::Test
     assert_includes result.out, "claude 200 · repo"
   end
 
+  # Runs the block with Claude session files naming pid => name.
+  def with_names(names)
+    Dir.mktmpdir do |dir|
+      names.each { |pid, name| File.write(File.join(dir, "#{pid}.json"), JSON.generate({ pid:, name: })) }
+      Agentmon::Metrics::SessionNames.claude_dir = dir
+      yield
+    ensure
+      Agentmon::Metrics::SessionNames.claude_dir = NO_NAMES_DIR
+    end
+  end
+
+  def test_a_long_name_is_cut_at_a_word_to_fit_the_width
+    name = "Agentmon r2ui integration with a much longer human session name"
+    plain, boxed = with_names(200 => name, 303 => "Web") do
+      [sessions(width: 100), sessions(tty: true, width: 100)]
+    end
+
+    assert plain.success?, plain.err
+    [plain, boxed].each do |result|
+      assert result.out.lines.all? { |l| R2UI::CLI::Ext::Tabulate.width(l.chomp) <= 100 }, result.out
+    end
+    label = lines(plain)[1][/\A.+?(?=\s{2})/]
+
+    kept = label.delete_suffix("…")
+
+    assert label.end_with?("…"), label
+    assert name.start_with?(kept), label
+    assert_operator kept.size, :>=, "Agentmon r2ui".size
+    assert_equal " ", name[kept.size], "cut after a whole word: #{label}"
+    assert_includes plain.out, "Web · claude 303 · web" # short enough: whole
+    assert_includes boxed.out, "Agentmon r2ui"
+  end
+
+  def test_json_carries_the_name
+    record = with_names(200 => "Named") { JSON.parse(sessions("--json").out.lines.first) }
+
+    assert_equal ["Named", "Named · claude 200 · repo", []], record.values_at("title", "label", "threads")
+  end
+
   def test_ended_sessions_only_with_all
     live = sessions(samples: [machine(0), ended_303])
     all = sessions("--all", samples: [machine(0), ended_303])
