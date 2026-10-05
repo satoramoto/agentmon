@@ -1,0 +1,126 @@
+name: Homebrew
+
+# After Publish puts a release on RubyGems, points the agentmon formula in satoramoto/homebrew-tap
+# at it: agentmon's .gem and the newest RubyGems versions of the gems it depends on (r2ui, fiddle),
+# with their sha256s. Then it installs the formula from source, runs `brew test` and
+# `brew audit --strict` on macOS, and only then pushes the tap. Run it by hand (Actions → Homebrew
+# → Run workflow) to retry, or to pick up a new r2ui without an agentmon release.
+#
+# Needs the TAP_TOKEN secret: a fine-grained token with Contents read/write on
+# satoramoto/homebrew-tap. See docs/releasing.md.
+
+on:
+  workflow_run:
+    workflows: [Publish]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "agentmon version (default: the latest on RubyGems)"
+        required: false
+
+concurrency:
+  group: homebrew
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: macos-latest
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      FORMULA: tap/Formula/agentmon.rb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: satoramoto/homebrew-tap
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+
+      - name: Point the formula at the release
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          # A tag-triggered Publish run reports the tag (vX.Y.Z) as its head branch.
+          version="${INPUT:-${TAG#v}}"
+          # RubyGems' API can lag the push by a minute or two.
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if [ -z "$version" ] || curl -fsS -o /dev/null "https://rubygems.org/api/v2/rubygems/agentmon/versions/$version.json"; then
+              break
+            fi
+            echo "agentmon $version isn't on RubyGems' API yet (attempt $attempt)"
+            sleep 30
+          done
+          VERSION="$version" ruby -rjson -rnet/http -e '
+            def get(path) = JSON.parse(Net::HTTP.get(URI("https://rubygems.org#{path}")))
+            def gem_url(name, version) = "https://rubygems.org/downloads/#{name}-#{version}.gem"
+
+            version = ENV["VERSION"].to_s
+            version = get("/api/v1/versions/agentmon/latest.json").fetch("version") if version.empty?
+            agentmon = get("/api/v2/rubygems/agentmon/versions/#{version}.json")
+
+            # The newest release of each runtime dependency (and theirs) that the requirements allow.
+            resolved = {}
+            queue = agentmon.dig("dependencies", "runtime").map { [_1["name"], _1["requirements"]] }
+            until queue.empty?
+              name, requirements = queue.shift
+              next if resolved.key?(name)
+              requirement = Gem::Requirement.new(*requirements.split(", "))
+              release = get("/api/v1/versions/#{name}.json")
+                        .reject { _1["prerelease"] || _1["platform"] != "ruby" }
+                        .select { requirement.satisfied_by?(Gem::Version.new(_1["number"])) }
+                        .max_by { Gem::Version.new(_1["number"]) }
+              abort "::error::no release of #{name} satisfies #{requirements}" unless release
+              resolved[name] = release
+              get("/api/v2/rubygems/#{name}/versions/#{release["number"]}.json")
+                .dig("dependencies", "runtime").each { queue << [_1["name"], _1["requirements"]] }
+            end
+
+            path = ENV.fetch("FORMULA")
+            formula = File.read(path)
+            formula.gsub!(/^[ \t]*# (LOCAL TEST SOURCE|  url ).*\n/, "")
+            formula.sub!(/^  url .*\n  sha256 .*\n/) do
+              %(  url "#{gem_url("agentmon", version)}"\n  sha256 "#{agentmon.fetch("sha")}"\n)
+            end
+            have = formula.scan(/^  resource "([^"]+)" do$/).flatten
+            unless have.sort == resolved.keys.sort
+              abort "::error::the formula has resources #{have.sort.inspect} but agentmon #{version} needs " \
+                    "#{resolved.keys.sort.inspect}; add or remove resource blocks in the tap by hand"
+            end
+            formula.gsub!(/^  resource "([^"]+)" do\n.*?^  end\n/m) do
+              release = resolved.fetch(Regexp.last_match(1))
+              %(  resource "#{Regexp.last_match(1)}" do\n) +
+                %(    url "#{gem_url(Regexp.last_match(1), release["number"])}"\n) +
+                %(    sha256 "#{release.fetch("sha")}"\n  end\n)
+            end
+            File.write(path, formula)
+            puts "agentmon #{version}: " + resolved.map { |name, r| "#{name} #{r["number"]}" }.join(", ")
+            File.write(ENV.fetch("GITHUB_ENV"), "VERSION=#{version}\n", mode: "a")
+          '
+          git -C tap diff
+
+      - name: Install, test and audit the formula
+        run: |
+          if git -C tap diff --quiet; then
+            echo "The formula already points at agentmon $VERSION and the newest dependencies."
+            exit 0
+          fi
+          git -C tap -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qam "agentmon $VERSION"
+          brew tap satoramoto/tap "$PWD/tap"
+          brew install --build-from-source satoramoto/tap/agentmon
+          brew test satoramoto/tap/agentmon
+          brew audit --strict satoramoto/tap/agentmon
+
+      - name: Push the tap
+        run: |
+          if [ "$(git -C tap rev-list --count origin/main..HEAD)" = 0 ]; then
+            exit 0
+          fi
+          git -C tap push origin HEAD:main

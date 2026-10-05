@@ -29,6 +29,15 @@ Publish then:
   environment `release`;
 - creates the GitHub Release `vX.Y.Z` with the gem attached and the changelog section as notes.
 
+When Publish succeeds, `.github/workflows/homebrew.yml` updates the Homebrew formula in
+[satoramoto/homebrew-tap](https://github.com/satoramoto/homebrew-tap): it points
+`Formula/agentmon.rb` at the new `.gem` and the newest r2ui and fiddle the gemspec allows (url and
+sha256 from RubyGems), installs it from source, runs `brew test` and `brew audit --strict` on
+macOS, and pushes the tap. If it fails, nothing is pushed; fix it and run the workflow by hand
+(Actions → Homebrew → Run workflow, optionally with a version). Run it by hand too after an r2ui
+release to move the formula to it. A new runtime dependency fails the workflow until its
+`resource` block is added to the formula by hand.
+
 ## When something fails
 
 - A check fails (wrong version, not on main, no changelog section): nothing was published. Fix it
@@ -49,5 +58,8 @@ Publish then:
    GitHub Actions, repository owner `satoramoto`, repository name `agentmon`, workflow filename
    `publish.yml`, environment `release`. The first publish creates the gem and turns it into a
    normal trusted publisher.
-3. The GitHub environment `release` is created on first use; add required reviewers to it to
+3. For the Homebrew update: create a fine-grained token with Contents read/write on
+   `satoramoto/homebrew-tap` only, and add it to this repo as the Actions secret `TAP_TOKEN`
+   (`gh secret set TAP_TOKEN -R satoramoto/agentmon`).
+4. The GitHub environment `release` is created on first use; add required reviewers to it to
    approve each publish. If you restrict its deployment refs, allow tags `v*.*.*`.
