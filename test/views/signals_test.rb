@@ -254,4 +254,64 @@ class SignalsViewTest < Minitest::Test
     assert_nil no_pageins[:pagein_rate]
     assert_nil Signals::Focus.value(reading(session_ledger: nil))[:processes]
   end
+
+  # Session network (a stand-in with SessionNetwork's members: model.rb's may not exist yet)
+
+  Net = Struct.new(:session_id, :label, :in_rate, :out_rate, :bytes_in, :bytes_out, :in_trend, :out_trend,
+                   :connections, :remote_hosts, :flags, keyword_init: true)
+
+  def net(id, in_rate: 1000.0, out_rate: 500.0, in_trend: [900.0, 1000.0], out_trend: [400.0, 500.0], **rest)
+    Net.new(session_id: id, label: id, in_rate:, out_rate:, bytes_in: 10 * MB, bytes_out: 2 * MB, in_trend:,
+            out_trend:, connections: 3, remote_hosts: 2, flags: [], **rest)
+  end
+
+  # A reading narrowed to session "a" (what FocusedReading gives once it filters :session_network).
+  def focused_on_a(network)
+    base = reading(system: system_view, session_network: network)
+    Class.new do
+      define_method(:focus) { "a" }
+      define_method(:[]) { |name| name == :session_network ? network.select { |n| n.session_id == "a" } : base[name] }
+    end.new
+  end
+
+  def test_network_signal_defaults
+    {
+      "focus.net_in_rate" => ["net in", :bytes_per_sec], "focus.net_out_rate" => ["net out", :bytes_per_sec],
+      "focus.bytes_in" => ["received", :bytes], "focus.bytes_out" => ["sent", :bytes],
+      "focus.connections" => ["conns", :integer], "focus.remote_hosts" => ["hosts", :integer]
+    }.each do |name, (label, unit)|
+      assert_equal [label, unit], [Signals.parse(name).label, Signals.parse(name).unit], name
+    end
+  end
+
+  def test_focus_sums_session_network
+    focus = Signals::Focus.value(reading(session_network: [net("a"), net("b", in_rate: 3000.0, out_rate: nil)]))
+
+    assert_in_delta 4000.0, focus[:net_in_rate]
+    assert_in_delta 500.0, focus[:net_out_rate] # an unknown rate is skipped
+    assert_equal 20 * MB, focus[:bytes_in]
+    assert_equal 4 * MB, focus[:bytes_out]
+    assert_equal 6, focus[:connections]
+    assert_equal 4, focus[:remote_hosts]
+    assert_nil focus[:net_in_trend] # several sessions: the views History keeps the series
+    assert_nil Signals.trend(Signals.parse("focus.net_in_rate"), reading(session_network: [net("a"), net("b")]))
+  end
+
+  def test_focus_network_unknowns_stay_unknown
+    unknown = Signals::Focus.value(reading(session_network: nil))
+
+    %i[net_in_rate net_out_rate bytes_in bytes_out connections remote_hosts].each { |k| assert_nil unknown[k], k }
+    assert_nil Signals.value(Signals.parse("focus.net_in_rate"), reading(session_network: nil))
+    assert_nil Signals::Focus.value(reading(session_network: [net("a", out_rate: nil)]))[:net_out_rate]
+    assert_equal 0, Signals::Focus.value(reading(session_network: []))[:connections]
+  end
+
+  def test_focused_network_uses_the_sessions_own_trend
+    focused = focused_on_a([net("a"), net("b", in_trend: [1.0])])
+
+    assert_in_delta 1000.0, Signals.value(Signals.parse("focus.net_in_rate"), focused)
+    assert_equal [900.0, 1000.0], Signals.trend(Signals.parse("focus.net_in_rate"), focused)
+    assert_equal [400.0, 500.0], Signals.trend(Signals.parse("focus.net_out_rate"), focused)
+    assert_nil Signals.trend(Signals.parse("focus.net_in_rate"), focused_on_a([net("a", in_trend: nil)]))
+  end
 end

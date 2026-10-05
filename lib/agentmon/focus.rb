@@ -34,7 +34,13 @@ module Agentmon
       end,
       session_ledger: ->(sessions, id, _) { sessions.select { |s| s.id == id } },
       pressure_drivers: ->(drivers, id, _) { drivers.select { |d| d.session_id == id } },
-      session_memory: ->(rows, id, _) { rows.select { |r| r.session_id == id } }
+      session_memory: ->(rows, id, _) { rows.select { |r| r.session_id == id } },
+      net_rates: lambda do |rates, id, reading|
+        by_pid = reading[:sessions]&.by_pid || {}
+        rates.select { |pid, _| by_pid[pid] == id }
+      end,
+      session_network: ->(rows, id, _) { rows.select { |r| r.session_id == id } },
+      connections: ->(rows, id, _) { rows.select { |r| r.session_id == id } }
     }.freeze
 
     module_function

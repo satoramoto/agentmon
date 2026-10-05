@@ -92,6 +92,55 @@ class SessionsPanelTest < Minitest::Test
     end
   end
 
+  # Stand-in with SessionNetwork's members (model.rb's Data class when it exists).
+  Net = Struct.new(:session_id, :label, :in_rate, :out_rate, :bytes_in, :bytes_out, :in_trend, :out_trend,
+                   :connections, :remote_hosts, :flags, keyword_init: true)
+
+  NET_KEYS = %i[net_in_rate net_out_rate bytes_in bytes_out connections remote_hosts].freeze
+
+  def session_rows(network)
+    ledger = prime(Fixtures.engine(machine(0), machine(2))).current[:session_ledger]
+    reading = Fixtures.reading(machine(2), previous: machine(0), values: { session_ledger: ledger, session_network: network })
+    [ledger, Agentmon::UI::SessionsPanel.rows(reading)]
+  end
+
+  def test_rows_carry_their_sessions_network
+    ledger, = session_rows(nil)
+    repo = ledger.find { |s| s.root_pid == 200 }
+    net = Net.new(session_id: repo.id, label: repo.label, in_rate: 2048.0, out_rate: 512.0, bytes_in: 10_000,
+                  bytes_out: 4000, connections: 3, remote_hosts: 2, flags: [:out_spike])
+    _, rows = session_rows([net])
+    row = rows.find { |r| r[:id] == repo.id }
+    other = rows.find { |r| r[:id] != repo.id }
+
+    assert_equal [2048.0, 512.0, 10_000, 4000, 3, 2, [:out_spike]], row.values_at(*NET_KEYS, :net_flags)
+    assert_equal [nil] * 6 + [[]], other.values_at(*NET_KEYS, :net_flags) # no entry: unknown
+  end
+
+  def test_unknown_network_leaves_rows_blank
+    _, rows = session_rows(nil)
+
+    refute_empty rows
+    rows.each { |r| assert_equal [nil] * 6 + [[]], r.values_at(*NET_KEYS, :net_flags) }
+  end
+
+  def test_network_columns_only_on_a_view
+    with_engine(prime(Fixtures.engine(machine(0), machine(2)))) do
+      dashboard_app
+      default = R2UI.registry.resource(:session).columns.map(&:key)
+
+      assert_equal %i[label processes cpu footprint peak_footprint cpu_seconds bytes_written read_rate write_rate age],
+                   default
+      R2UI.reset!
+      dashboard_app(view: :dense)
+      cols = R2UI.registry.resource(:session).columns.to_h { |c| [c.key, [c.label, c.format]] }
+
+      assert_equal({ net_in_rate: ["Net in", :bytes_per_sec], net_out_rate: ["Net out", :bytes_per_sec],
+                     bytes_in: ["Recv", :bytes], bytes_out: ["Sent", :bytes], connections: ["Conns", :integer],
+                     remote_hosts: ["Hosts", :integer] }, cols.slice(*NET_KEYS))
+    end
+  end
+
   def test_age_formats
     age = Agentmon::UI::SessionsPanel.method(:age)
 

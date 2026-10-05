@@ -24,6 +24,7 @@ require_relative "views/widgets"
 #   agentmon --layout mine
 #
 # Words (all take signals, "metric.member", with defaults from views/signals.rb):
+#   view-level row, focused { rows shown instead while a session is focused } (Views::Drill)
 #   row-level  panel, use :name (a registered agentmon panel), top, band, detail
 #   in a panel meter, trend, spark, stat, top, band, detail
 #
@@ -39,7 +40,13 @@ module Agentmon
   module Views
     # --- the recorded view ---
 
-    View = Data.define(:name, :title, :rows)
+    # `rows`: the home rows; `focused`: the rows shown instead while a session is focused
+    # (`focused do ... end`; empty when the view has no drill-down).
+    View = Data.define(:name, :title, :rows, :focused) do
+      def initialize(name:, title:, rows:, focused: [].freeze) = super
+      def drill? = !focused.empty?
+      def all_rows = rows + focused
+    end
     RowDef = Data.define(:height, :panels)
     PanelDef = Data.define(:name, :title, :span, :resource, :items, :options)
     UseDef = Data.define(:name, :span, :title)
@@ -49,8 +56,18 @@ module Agentmon
     Spark = Data.define(:signal)
     Stat = Data.define(:signals, :columns)
     # `widths`: { column => cells } fixes text columns and cuts their values at word boundaries.
-    # `spark: false` leaves the braille sparkline off the sort column (narrow panels).
-    Top = Data.define(:resource, :by, :limit, :columns, :group_by, :widths, :spark)
+    # `spark`: true puts a braille sparkline on the sort column, false on none (narrow panels), an
+    # Array of column keys on those columns.
+    Top = Data.define(:resource, :by, :limit, :columns, :group_by, :widths, :spark) do
+      # The columns that get a sparkline.
+      def spark_columns
+        case spark
+        when true then [by].compact.map(&:to_sym)
+        when false, nil then []
+        else Array(spark).map(&:to_sym)
+        end
+      end
+    end
     Band = Data.define(:resource, :show)
     Detail = Data.define(:resource, :columns)
 
@@ -78,23 +95,26 @@ module Agentmon
       def build(name, title:, &block)
         builder = ViewBuilder.new(title)
         builder.instance_eval(&block)
-        View.new(name: name.to_sym, title: builder.title, rows: builder.rows.freeze)
+        View.new(name: name.to_sym, title: builder.title, rows: builder.rows.freeze,
+                 focused: builder.focused_rows.freeze)
       end
 
       def signal(name, **) = Signals.parse(name.to_s, **)
 
-      # Every Top item of `view` for `resource`.
+      # Every Top item of `view` for `resource` (home and focused rows).
       def tops(view, resource)
-        view.rows.flat_map(&:panels).grep(PanelDef).flat_map(&:items).grep(Top).select { |t| t.resource == resource }
+        view.all_rows.flat_map(&:panels).grep(PanelDef).flat_map(&:items).grep(Top).select { |t| t.resource == resource }
       end
     end
 
     class ViewBuilder
-      attr_reader :rows
+      attr_reader :rows, :focused_rows
 
       def initialize(title)
         @title = title
         @rows = []
+        @focused_rows = []
+        @in_focused = false
       end
 
       def title(text = nil)
@@ -102,10 +122,24 @@ module Agentmon
         @title
       end
 
+      # Inside `focused`, rows go to the drill-down instead of the home rows.
       def row(height: nil, &block)
         builder = RowBuilder.new
         builder.instance_eval(&block)
-        @rows << RowDef.new(height:, panels: builder.panels.freeze)
+        (@in_focused ? @focused_rows : @rows) << RowDef.new(height:, panels: builder.panels.freeze)
+      end
+
+      # The rows shown instead of the home rows while a session is focused (engine.focus): Enter on
+      # the Sessions table (or the band) drills in, Escape comes back. Once per view, not nested.
+      def focused(&block)
+        raise ArgumentError, "focused: needs a block of rows" unless block
+        raise ArgumentError, "focused: not inside another focused" if @in_focused
+        raise ArgumentError, "focused: only once per view" if @focused_rows.any?
+
+        @in_focused = true
+        instance_eval(&block)
+      ensure
+        @in_focused = false
       end
     end
 
@@ -159,7 +193,9 @@ module Agentmon
 
       def stat(*sigs, columns: 2) = @items << Stat.new(signals: sigs.map { |s| Views.signal(s) }.freeze, columns:)
 
+      # `spark:` true (the `by:` column), false (none) or column keys (`%i[cpu footprint]`).
       def top(resource, by: nil, limit: nil, columns: nil, group_by: nil, widths: {}, spark: true)
+        spark = Array(spark).map(&:to_sym).freeze unless [true, false, nil].include?(spark)
         @items << Top.new(resource: resource.to_sym, by:, limit:, columns: columns&.map(&:to_sym), group_by:,
                           widths: widths.transform_keys(&:to_sym).freeze, spark:)
       end
@@ -211,6 +247,29 @@ module Agentmon
       def cached(key)
         @cache.clear if @cache.size > CACHE_LIMIT
         @cache.fetch(key) { @cache[key] = yield }
+      end
+
+      # --- the drill-down (`focused`): which r2ui rows are on the dashboard ---
+
+      # Splits the r2ui dashboard's rows (built as home rows, then focused rows) into the two sets.
+      def attach(dashboard)
+        rows = dashboard.rows.dup
+        @home_rows = rows.first(@view.rows.size).freeze
+        @focused_rows = rows.drop(@view.rows.size).freeze
+      end
+
+      def drill? = @view.drill?
+
+      def mode = @engine.focus ? :focused : :home
+
+      # Puts the set for the current mode on the dashboard (only that set: its layout, panels, tab
+      # order and drawing are exactly those of a view with only these rows).
+      def show(dashboard)
+        want = mode == :focused ? @focused_rows : @home_rows
+        rows = dashboard.rows
+        return if rows.size == want.size && rows.each_with_index.all? { |r, i| r.equal?(want[i]) }
+
+        rows.replace(want)
       end
     end
 
@@ -471,15 +530,68 @@ module Agentmon
       end
     end
 
+    # --- the drill-down: home rows, or the focused rows while a session is focused ---
+
+    # r2ui has no way to hide panels or switch a dashboard's rows, so the view's r2ui dashboard is
+    # built with both sets (App.new then makes feeds and table states for every panel) and the
+    # Runtime swaps `dashboard.rows` to the set for engine.focus before every key and every frame.
+    # Only the visible set's panels are on the dashboard: r2ui lays them out as if alone (fixed
+    # heights, shared rest, the last row taking what is left), tab cycles only them, hidden panels
+    # draw nothing and lookups by name (:session, :process, :detail) find the visible one.
+    module Drill
+      STORE = :agentmon_drill
+      HOME = "sessions · ⏎ open a session"
+      BACK = "esc back to sessions"
+
+      module_function
+
+      # Shows the set for the current mode and moves key focus when the mode changed: to the
+      # first table panel of the focused set when drilling in, back to the home panel that had it
+      # when coming out (the first home table panel when there is none, e.g. at start).
+      def sync(app, rt)
+        return unless rt&.drill?
+
+        dashboard = app.dashboard
+        rt.show(dashboard)
+        store = app.store(STORE)
+        mode = rt.mode
+        before = store[:mode]
+        panels = dashboard.panels
+        return if before == mode && panels.include?(app.focus)
+
+        store[:mode] = mode
+        store[:home_focus] = app.focus if before == :home
+        target = mode == :home ? store.delete(:home_focus) : nil
+        target = nil unless panels.include?(target)
+        target ||= panels.find(&:table) || panels.first
+        app.focus = target if target
+      end
+
+      # The status bar on a view with a drill-down: where you are and how to go back.
+      def status(rt)
+        return nil unless rt&.drill?
+
+        engine = rt.engine
+        id = engine.focus or return HOME
+        label = engine.focused_session&.label || id.to_s
+        "▸ #{label} · #{BACK}"
+      end
+    end
+
     # --- resource decoration (only while a view is installed) ---
 
     module Decorate
       PRIORITIES = {
         process: { name: 9, cpu: 9, footprint: 8, session: 6, pid: 5, run_wait: 4, read_rate: 4, write_rate: 4,
                    pagein_rate: 3, resident: 2, cwd: 1 },
-        session: { label: 9, cpu: 9, footprint: 8, processes: 6, age: 5, peak_footprint: 3, read_rate: 2,
-                   write_rate: 2, cpu_seconds: 1, bytes_written: 1 }
+        session: { label: 9, cpu: 9, footprint: 8, processes: 6, age: 5, net_out_rate: 4, net_in_rate: 4,
+                   peak_footprint: 3, remote_hosts: 3, connections: 2, read_rate: 2, write_rate: 2, cpu_seconds: 1,
+                   bytes_written: 1, bytes_in: 1, bytes_out: 1 }
       }.freeze
+      # The anomaly mark (docs/views.md, "Anomaly mark"): a session row whose `net_flags` is not
+      # empty shows FLAG before its label, in FLAG_COLOR. The metric decides; this only marks.
+      FLAG = "⚑ "
+      FLAG_COLOR = "#E5484D"
 
       # Text columns get a fixed width in a view, so their values are cut at a word boundary here
       # (r2ui's table cuts a flexible column mid-word). `top widths:` overrides these.
@@ -492,15 +604,29 @@ module Agentmon
       module_function
 
       # Heat on percent cells (a full core is red), the accent on bytes, a braille sparkline on
-      # each sort column, priorities for dropping, and fixed word-cut widths (WIDTHS, then `top
-      # widths:`). Applies to every panel of the resource on a view dashboard, `use` ones too.
+      # each `spark:` column (the sort column by default), priorities for dropping, fixed word-cut
+      # widths (WIDTHS, then `top widths:`) and the anomaly mark on session labels. Applies to
+      # every panel of the resource on a view dashboard, `use` ones too.
       def call(resource, name)
         view = Views.installing or return
         tops = Views.tops(view, name)
-        sorts = tops.select(&:spark).filter_map(&:by)
-        sorts = [:cpu] if tops.empty?
+        sparks = tops.flat_map(&:spark_columns).uniq
+        sparks = [:cpu] if tops.empty?
         widths = tops.map(&:widths).reduce(WIDTHS.fetch(name, {}), :merge)
-        resource.columns.map! { |col| column(col, name, sorts, widths) }
+        resource.columns.map! { |col| column(col, name, sparks, widths) }
+      end
+
+      def flagged?(row)
+        flags = Signals.fetch(row, :net_flags)
+        flags.respond_to?(:empty?) && !flags.empty?
+      end
+
+      # The label with the mark when `row` is flagged, cut at a word boundary to `width` cells
+      # (nil: uncut).
+      def flag_label(row, value, width)
+        return (width ? Widgets.cut(value, width) : value) unless value.is_a?(String) && flagged?(row)
+
+        FLAG + (width ? Widgets.cut(value, width - Widgets.visible_width(FLAG)) : value)
       end
 
       def column(col, name, sorts, widths)
@@ -519,9 +645,17 @@ module Agentmon
         elsif col.sparkline
           opts[:sparkline] = false
         end
-        if (w = widths[col.key])
-          reader = col.reader
-          key = col.key
+        reader = col.reader
+        key = col.key
+        w = widths[key]
+        if name == :session && key == :label
+          opts[:width] = w if w
+          opts[:reader] = lambda do |row|
+            flag_label(row, reader ? reader.call(row) : R2UI::Value.fetch(row, key), w)
+          end
+          red = R2UI::Widgets::Glyphs.fg(FLAG_COLOR)
+          opts[:style] = ->(value, _line) { value.is_a?(String) && value.start_with?(FLAG) ? red : nil }
+        elsif w
           opts[:width] = w
           opts[:reader] = lambda do |row|
             value = reader ? reader.call(row) : R2UI::Value.fetch(row, key)
@@ -545,20 +679,22 @@ module Agentmon
     module_function
 
     # The r2ui dashboard (named like the default one, so every agentmon dashboard extension
-    # applies) built from `view`'s rows.
+    # applies) built from `view`'s rows: the home rows, then the focused ones (Drill shows one set).
     def dashboard(view, engine, registry)
       extras = registry.dashboard_blocks
       runtime = Runtime.new(engine:, view:)
-      R2UI::DSL::Dashboard.build(UI::DASHBOARD) do
+      built = R2UI::DSL::Dashboard.build(UI::DASHBOARD) do
         title view.title
         extras.each { |b| instance_exec(engine, &b) }
         agentmon_view(runtime)
-        view.rows.each do |spec|
+        view.all_rows.each do |spec|
           row(height: spec.height) do
             spec.panels.each { |p| Views.place(self, p, engine, registry, runtime) }
           end
         end
       end
+      runtime.attach(built)
+      built
     end
 
     def place(row, spec, engine, registry, runtime)
@@ -593,7 +729,7 @@ module Agentmon
     # every interval and marks frames due, so this one refreshes once an hour: every feed refresh
     # is a frame, and a second feed at another phase would double the idle frames.
     def signals_resource(engine, view = Views.installing)
-      tables = view && view.rows.flat_map(&:panels).any? { |p| p.is_a?(UseDef) || p.resource != SIGNALS }
+      tables = view && view.all_rows.flat_map(&:panels).any? { |p| p.is_a?(UseDef) || p.resource != SIGNALS }
       every = tables ? 3600 : engine.interval
       R2UI::DSL::Resource.build(SIGNALS) do
         title "Signals"
@@ -627,7 +763,33 @@ module Agentmon
       # never stop. On a view dashboard the gutter marks show and fade with the frames that tweens
       # and pulses already draw, and go at the next sample, instead of keeping 20 fps running.
       app.motion.singleton_class.prepend(Views::NoHold) if view_runtime
+      Views::Drill.sync(app, view_runtime)
     end
+
+    # The drill-down follows engine.focus: before any handler sees a message (so tab, Enter and
+    # the name lookups see only the visible panels), after handlers changed the focus, and before
+    # every frame (`styles` is the only hook App#frame runs before laying out; a focus set
+    # directly, or a session that ended, shows on the next frame).
+    observe { |_message| Views::Drill.sync(app, view_runtime) }
+    after_update { Views::Drill.sync(app, view_runtime) }
+    styles do
+      rt = view_runtime
+      if rt&.drill?
+        UI::SessionFocus.clear_if_gone(app, rt.engine)
+        Views::Drill.sync(app, rt)
+      end
+      nil
+    end
+
+    # Where you are and how to go back, on views with a drill-down. r2ui shows the first status
+    # hook that returns text, in load order, and has no priority for them (extension.rb:87), so
+    # this registers through the hook method with one above session_focus's "focus: ..." (which
+    # loads first). Problems still win: with engine errors this returns nil and agentmon_errors
+    # shows them.
+    hook(:status, nil, proc {
+      rt = view_runtime
+      rt && Agentmon.engine_errors.empty? ? Views::Drill.status(rt) : nil
+    }, priority: 10)
 
     # Animation needs fewer frames than r2ui's default 20 fps to look smooth at these durations.
     program_options do

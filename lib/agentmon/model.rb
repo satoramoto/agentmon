@@ -130,12 +130,67 @@ module Agentmon
     :runnable_time,                          # seconds (cumulative), time on a CPU included
     :threads, :running_threads,              # counts now
     :pagein_rate, :fault_rate, :cow_fault_rate, :context_switch_rate, # per second
-    :run_wait                                # percent of one core spent waiting for a CPU
+    :run_wait,                               # percent of one core spent waiting for a CPU
+    # Network (metrics/network.rb, from nettop); nil when unknown (no snapshot yet, first sighting).
+    :net_in_rate, :net_out_rate              # bytes/s received / sent over all its sockets
   ) do
     def initialize(disk_read: nil, wired: nil, pageins: nil, faults: nil, cow_faults: nil, context_switches: nil,
                    runnable_time: nil, threads: nil, running_threads: nil, pagein_rate: nil, fault_rate: nil,
-                   cow_fault_rate: nil, context_switch_rate: nil, run_wait: nil, **) = super
+                   cow_fault_rate: nil, context_switch_rate: nil, run_wait: nil, net_in_rate: nil,
+                   net_out_rate: nil, **) = super
   end
+
+  # probes/network.rb: one socket (flow) of a process as one `nettop -x -L 0` line prints it.
+  NetFlow = Data.define(
+    :protocol,     # "tcp4", "udp6", "quic4", ...
+    :local,        # local endpoint as nettop prints it: "192.0.2.5:55584" (IPv4 `:` port),
+    :remote,       # "2001:db8::1.443" (IPv6 `.` port), "*:*" / "*.*" wildcards
+    :remote_host,  # remote address or name without the port; nil for the `*` wildcard
+    :remote_port,  # Integer, nil for `*`
+    :interface,    # "en0", "lo0"; nil when nettop leaves it empty
+    :state,        # "Established", "Listen", ...; nil for stateless (UDP) or empty
+    :bytes_in,     # cumulative bytes received on this flow; nil when nettop leaves it empty
+    :bytes_out     # cumulative bytes sent, likewise
+  )
+
+  # probes/network.rb: one process's sockets in one nettop block.
+  NetProcess = Data.define(
+    :pid,
+    :name,         # nettop's (truncated) process name
+    :bytes_in,     # cumulative bytes received, as nettop counts them for the process
+    :bytes_out,    # cumulative bytes sent
+    :flows         # Array of NetFlow
+  )
+
+  # probes/network.rb: one complete nettop block (sample[:network]).
+  NetSnapshot = Data.define(
+    :at_mono,      # monotonic seconds when the block's header arrived (rates use these)
+    :processes     # { pid => NetProcess }; a process without sockets has no entry
+  )
+
+  # metrics/network.rb reading[:net_rates], per pid: between the two latest nettop snapshots.
+  NetRates = Data.define(:in_rate, :out_rate) # bytes/s; nil when unknown
+
+  # metrics/network.rb reading[:session_network]: one alive session's network, each pid once.
+  SessionNetwork = Data.define(
+    :session_id, :label,
+    :in_rate, :out_rate,   # bytes/s now, summed over members (nil when no member's rate is known)
+    :bytes_in, :bytes_out, # cumulative bytes received / sent by members while agentmon observed them
+    :in_trend, :out_trend, # the last 120 known rates (bytes/s), oldest first
+    :connections,          # count of member flows with a concrete remote (not `*`)
+    :remote_hosts,         # count of distinct remote hosts, loopback and link-local left out
+    :flags                 # Array of Symbols from the anomaly rule (:out_spike, :in_spike, :many_hosts); [] normal
+  )
+
+  # metrics/network.rb reading[:connections]: one flow of a process in an agent session with a
+  # concrete remote (no `*`, no Listen). Fields as NetFlow; rates bytes/s, nil the first time.
+  ConnectionRow = Data.define(
+    :pid, :name, :session_id,
+    :session,              # session label
+    :protocol, :local, :remote, :remote_host, :remote_port, :interface, :state,
+    :bytes_in, :bytes_out, # cumulative bytes on this flow
+    :in_rate, :out_rate    # bytes/s between the two latest snapshots
+  )
 
   # probes/memory.rb (story a01): the machine's memory counters. Sizes in bytes; the counters
   # (swapins .. pageins) are cumulative bytes since boot (pages x page size).

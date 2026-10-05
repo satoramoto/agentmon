@@ -7,13 +7,15 @@ module Agentmon
     module ProcessRows
       module_function
 
-      def call(processes, rates, cwds, sessions)
+      def call(processes, rates, cwds, sessions, net_rates = nil)
         cwds ||= {}
         rates ||= {} # nil when a metric failed this sample: show what the probe has
+        net_rates ||= {} # nil while there is no nettop snapshot: network rates unknown
         sessions ||= SessionMap.new(sessions: [], by_pid: {})
         labels = sessions.sessions.to_h { |s| [s.id, s.label] }
         (processes || []).map do |p|
           rate = rates[p.pid]
+          net = net_rates[p.pid]
           session_id = sessions.by_pid[p.pid]
           ProcessRow.new(
             pid: p.pid, ppid: p.ppid, name: p.name, path: p.path, cwd: cwds[p.pid],
@@ -24,7 +26,8 @@ module Agentmon
             disk_read: p.disk_read, wired: p.wired, pageins: p.pageins, faults: p.faults, cow_faults: p.cow_faults,
             context_switches: p.context_switches, runnable_time: p.runnable_time, threads: p.threads,
             running_threads: p.running_threads, pagein_rate: rate&.pagein_rate, fault_rate: rate&.fault_rate,
-            cow_fault_rate: rate&.cow_fault_rate, context_switch_rate: rate&.context_switch_rate, run_wait: rate&.run_wait
+            cow_fault_rate: rate&.cow_fault_rate, context_switch_rate: rate&.context_switch_rate, run_wait: rate&.run_wait,
+            net_in_rate: net&.in_rate, net_out_rate: net&.out_rate
           )
         end
       end
@@ -32,6 +35,7 @@ module Agentmon
   end
 
   metric(:process_rows) do |reading|
-    Metrics::ProcessRows.call(reading.sample[:processes], reading[:process_rates], reading.sample[:cwd], reading[:sessions])
+    Metrics::ProcessRows.call(reading.sample[:processes], reading[:process_rates], reading.sample[:cwd], reading[:sessions],
+                              reading[:net_rates])
   end
 end

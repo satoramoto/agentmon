@@ -18,13 +18,19 @@ module Agentmon
     module SessionsPanel
       module_function
 
-      # reading[:session_ledger] as rows; none while no ledger is available.
+      NO_NETWORK = { net_in_rate: nil, net_out_rate: nil, bytes_in: nil, bytes_out: nil, connections: nil,
+                     remote_hosts: nil, net_flags: [].freeze }.freeze
+
+      # reading[:session_ledger] as rows; none while no ledger is available. Each row also carries
+      # its session's network (reading[:session_network], matched by session id): nil values and
+      # no flags while network data is unknown or the session has no entry.
       def rows(reading)
         now = reading.at
-        (reading[:session_ledger] || []).map { |s| row(s, now) }
+        network = (reading[:session_network] || []).to_h { |n| [n.session_id, n] }
+        (reading[:session_ledger] || []).map { |s| row(s, now, network[s.id]) }
       end
 
-      def row(session, now)
+      def row(session, now, network = nil)
         ended = session.ended_at
         {
           id: session.id,
@@ -39,8 +45,17 @@ module Agentmon
           bytes_written: session.bytes_written,
           read_rate: session.read_rate,
           write_rate: session.write_rate,
-          age: age((ended || now) - (session.started_at || session.first_seen_at))
+          age: age((ended || now) - (session.started_at || session.first_seen_at)),
+          **network_values(network)
         }
+      end
+
+      # A SessionNetwork as row values (NO_NETWORK for nil).
+      def network_values(n)
+        return NO_NETWORK unless n
+
+        { net_in_rate: n.in_rate, net_out_rate: n.out_rate, bytes_in: n.bytes_in, bytes_out: n.bytes_out,
+          connections: n.connections, remote_hosts: n.remote_hosts, net_flags: Array(n.flags) }
       end
 
       # "45s", "12m", "3h 5m", "2d 4h"; "" when unknown.
@@ -82,6 +97,18 @@ module Agentmon
     end
 
     filter :label, :cwd
+  end
+
+  # Network columns, on performance views only (--layout): the default dashboard keeps its columns.
+  extend_resource :session do |_engine|
+    next unless Agentmon::Views.installing
+
+    column :net_in_rate, label: "Net in", format: :bytes_per_sec
+    column :net_out_rate, label: "Net out", format: :bytes_per_sec
+    column :bytes_in, label: "Recv", format: :bytes
+    column :bytes_out, label: "Sent", format: :bytes
+    column :connections, label: "Conns", format: :integer
+    column :remote_hosts, label: "Hosts", format: :integer
   end
 
   panel :session, row: :top, order: 20, span: 2
