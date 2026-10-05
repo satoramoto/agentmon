@@ -55,7 +55,15 @@ module Agentmon
     Detail = Data.define(:resource, :columns)
 
     SIGNALS = :view_signals
-    MIN_TILE = 16
+    FPS = 10
+    PULSE_SECONDS = 0.5
+    TWEEN_SECONDS = 0.35
+
+    # Prepended to a view app's Motion: `hold` (r2ui's table gutter) no longer keeps frames due.
+    module NoHold
+      def hold(_seconds) = nil
+    end
+    MIN_TILE = 18 # room for a "claude 12345" title uncut
 
     class << self
       # The view UI.install is building (nil for the default dashboard): resource decorations
@@ -195,7 +203,7 @@ module Agentmon
       def pulse(motion, key, text)
         before = @shown[key]
         @shown[key] = text
-        level = motion.pulse(key, !before.nil? && before != text)
+        level = motion.pulse(key, !before.nil? && before != text, duration: PULSE_SECONDS)
         (level * 12).round / 12.0
       end
 
@@ -236,7 +244,8 @@ module Agentmon
         sig = item.signal
         fraction = Signals.fraction(sig, reading)
         text = meter_text(sig, reading)
-        shown = fraction && ctx.motion.tween([:agentmon_meter, ctx.panel.name, sig.name], fraction)
+        shown = fraction && ctx.motion.tween([:agentmon_meter, ctx.panel.name, sig.name], fraction,
+                                                  duration: TWEEN_SECONDS)
         pulse = rt.pulse(ctx.motion, [:agentmon_pulse, ctx.panel.name, sig.name], text)
         text_w = max_width(ctx.panel.items.grep(Meter).map { |m| meter_text(m.signal, reading) })
         label_w = label_width(ctx.panel)
@@ -274,10 +283,17 @@ module Agentmon
           text = text(sig, value)
           pulse = rt.pulse(ctx.motion, [:agentmon_pulse, ctx.panel.name, sig.name], text)
           height = share + (i < extra ? 1 : 0)
-          rt.cached([:trend, item, sig.name, ctx.width, height, values.size, values.last, text, pulse]) do
-            Widgets.trend(label: sig.label, text:, values:, width: ctx.width, height:, max: sig.max,
-                          chart_sgr: chart_sgr(sig, fraction), text_sgr: value_sgr(sig, fraction, pulse, text))
+          # The header pulses frame by frame; the braille area changes once per sample, so it is
+          # cached on the series itself (a pulse frame redraws only the header).
+          header = rt.cached([:trend_head, sig.label, ctx.width, text, pulse, fraction&.round(2)]) do
+            Widgets.sides(sig.label.to_s, R2UI::Widgets::Glyphs.fg(Widgets::MUTED), text || Widgets::UNKNOWN,
+                          value_sgr(sig, fraction, pulse, text), ctx.width)
           end
+          area = rt.cached([:trend_area, ctx.width, height, sig.max, values.hash, fraction&.round(2)]) do
+            Widgets.trend(label: "", text: "", values:, width: ctx.width, height:, max: sig.max,
+                          chart_sgr: chart_sgr(sig, fraction)).drop(1)
+          end
+          [header, *area]
         end.join("\n")
       end
 
@@ -290,7 +306,7 @@ module Agentmon
         pulse = rt.pulse(ctx.motion, [:agentmon_pulse, ctx.panel.name, sig.name], text)
         label_w = label_width(ctx.panel)
         text_w = max_width(ctx.panel.items.grep(Spark).map { |s| text(s.signal, Signals.value(s.signal, reading)) })
-        rt.cached([:spark, item, ctx.width, values.size, values.last, text, pulse, label_w, text_w]) do
+        rt.cached([:spark, item, ctx.width, values.hash, text, pulse, label_w, text_w]) do
           Widgets.spark(label: sig.label, values:, text:, width: ctx.width, max: sig.max, label_width: label_w,
                         text_width: text_w, chart_sgr: chart_sgr(sig, fraction),
                         text_sgr: value_sgr(sig, fraction, pulse, text))
@@ -319,16 +335,17 @@ module Agentmon
         col_w = (ctx.width - (gap * (columns - 1))) / columns
         text = UI::ProcessDetail.render(ctx.app, rt.engine, ctx.width)
         lines = join_wrapped(text.split("\n"))
-        rows = [(lines.size + columns - 1) / columns, ctx.height].min
-        rows = 1 if rows < 1
         rt.cached([:detail, ctx.width, ctx.height, lines]) do
-          cells = lines.first(rows * columns).map.with_index do |line, i|
-            fitted = fit_pair(line, col_w)
-            i.zero? ? R2UI::Widgets::Glyphs.paint(fitted, "1") : fitted
-          end
-          Array.new(rows) do |r|
+          # The heading (name and pid) gets its own full-width line; the pairs flow in columns.
+          head, *pairs = lines
+          head = R2UI::Widgets::Glyphs.paint(Widgets.cut(head.to_s, ctx.width), "1")
+          rows = [(pairs.size + columns - 1) / columns, ctx.height - 1].min
+          rows = 0 if rows.negative?
+          cells = pairs.first(rows * columns).map { |line| fit_pair(line, col_w) }
+          body = Array.new(rows) do |r|
             Array.new(columns) { |c| Widgets.pad(cells[(c * rows) + r] || "", col_w) }.join(" " * gap)
-          end.join("\n")
+          end
+          [head, *body].join("\n")
         end
       end
 
@@ -407,8 +424,8 @@ module Agentmon
         cpu_text = tile.cpu && Kernel.format("%.0f%%", tile.cpu)
         pulse = rt.pulse(ctx.motion, [:agentmon_band_pulse, tile.series_key], cpu_text)
         fraction = tile.cpu && (tile.cpu / 100.0).clamp(0.0, 1.0)
-        shown = fraction && ctx.motion.tween([:agentmon_band_cpu, tile.series_key], fraction)
-        key = [:tile, tile, width, height, (glow * 16).round, cursor, values.size, values.last,
+        shown = fraction && ctx.motion.tween([:agentmon_band_cpu, tile.series_key], fraction, duration: TWEEN_SECONDS)
+        key = [:tile, tile, width, height, (glow * 16).round, cursor, values.hash,
                shown && (shown * width * 8).round, pulse]
         rt.cached(key) do
           inner = width - 2
@@ -572,14 +589,19 @@ module Agentmon
 
     # The hidden resource behind panels with only view words: its feed samples the engine on
     # the feed thread every interval (so drawers never do) and marks frames due.
-    def signals_resource(engine)
+    # When the view also shows a table (or a `use` panel), that resource's feed already samples
+    # every interval and marks frames due, so this one refreshes once an hour: every feed refresh
+    # is a frame, and a second feed at another phase would double the idle frames.
+    def signals_resource(engine, view = Views.installing)
+      tables = view && view.rows.flat_map(&:panels).any? { |p| p.is_a?(UseDef) || p.resource != SIGNALS }
+      every = tables ? 3600 : engine.interval
       R2UI::DSL::Resource.build(SIGNALS) do
         title "Signals"
         source do
           engine.current
           []
         end
-        refresh every: engine.interval
+        refresh every:
       end
     end
   end
@@ -600,6 +622,16 @@ module Agentmon
 
     setup do
       app.motion.enabled = Views.motion?
+      # Cost (docs/views.md, "Motion"): r2ui's table gutter holds the motion active for 1.5-2 s
+      # after every reorder, and a process list reorders on nearly every sample, so frames would
+      # never stop. On a view dashboard the gutter marks show and fade with the frames that tweens
+      # and pulses already draw, and go at the next sample, instead of keeping 20 fps running.
+      app.motion.singleton_class.prepend(Views::NoHold) if view_runtime
+    end
+
+    # Animation needs fewer frames than r2ui's default 20 fps to look smooth at these durations.
+    program_options do
+      view_runtime && Views.motion? ? { fps: Views::FPS } : nil
     end
 
     panel_item(Views::Meter) { |item| Views::Draw.meter(self, view_runtime, item) }
@@ -615,11 +647,8 @@ module Agentmon
       Views::BandDraw.key(self, rt, band, R2UI::Keys.name(message)) or pass
       nil
     end
-
-    hints do
-      rt = view_runtime
-      rt && dashboard.panels.flat_map(&:items).grep(Views::Band).any? ? [["←→", "pick"]] : nil
-    end
+    # No "←→ pick" hint: r2ui's status bar drops every hint when they don't all fit beside the
+    # status text (renderer.rb draw_status), and at 100 columns one more would hide them all.
   end
 end
 
