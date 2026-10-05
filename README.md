@@ -4,11 +4,19 @@ What AI coding agents (Claude, Codex) cost your Mac: per-session CPU, real memor
 
 ## Install
 
+With Homebrew (brings its own Ruby):
+
+```
+brew install satoramoto/tap/agentmon
+```
+
+Or as a gem:
+
 ```
 gem install agentmon
 ```
 
-Requirements: macOS and Ruby 3.3 or newer. No root needed (other users' processes show only what `ps` gives). The network columns come from `nettop`, which ships with macOS; without it they show as unknown and the rest works.
+Requirements: macOS; the gem needs Ruby 3.3 or newer. No root needed (other users' processes show only what `ps` gives). The network columns come from `nettop`, which ships with macOS; without it they show as unknown and the rest works.
 
 ## Usage
 
