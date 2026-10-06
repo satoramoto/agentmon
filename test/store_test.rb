@@ -48,6 +48,25 @@ class StoreCoreTest < Minitest::Test
     assert_equal ["new"], @store.each(:sessions).map { |r| r[:id] }
   end
 
+  # launchd, cron and `env -i` start Ruby with no locale: default external encoding US-ASCII.
+  def test_reads_and_writes_utf8_without_a_locale
+    previous = Encoding.default_external
+    silence_warnings { Encoding.default_external = Encoding::US_ASCII }
+    @store.append(:sessions, id: "a", name: "café · ✓")
+
+    assert_equal ["café · ✓"], @store.each(:sessions).map { |r| r[:name] }
+  ensure
+    silence_warnings { Encoding.default_external = previous }
+  end
+
+  def silence_warnings
+    verbose = $VERBOSE
+    $VERBOSE = nil
+    yield
+  ensure
+    $VERBOSE = verbose
+  end
+
   def test_default_dir_follows_the_environment
     assert_equal "/tmp/x", Agentmon::Store.default_dir("AGENTMON_STATE_DIR" => "/tmp/x")
     assert_equal "/tmp/state/agentmon", Agentmon::Store.default_dir("XDG_STATE_HOME" => "/tmp/state")

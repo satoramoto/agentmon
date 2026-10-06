@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- History and Claude session names are read and written as UTF-8 regardless of locale, so `agentmon report` and `record` no longer crash with `InvalidByteSequenceError` when started without `LANG` (launchd, cron, `env -i`).
+
 ## 0.1.0
 
 First release.

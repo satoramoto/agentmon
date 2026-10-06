@@ -80,7 +80,7 @@ module Agentmon
           mtime = File.mtime(path)
           return cache[path] if cache[path] && cache[path][0] == mtime
 
-          cache[path] = [mtime, *parse_claude(File.read(path))]
+          cache[path] = [mtime, *parse_claude(File.read(path, encoding: Encoding::UTF_8))]
         rescue SystemCallError, IOError
           cache.delete(path)
           nil

@@ -109,7 +109,8 @@ class TopCommandTest < Minitest::Test
 
     assert_equal 1, result.code
     assert_includes result.err, "sampler died"
-    assert_includes result.out, "claude 200 · repo" # the first frame was drawn
+    # r2ui's test shell tags `out` with the locale's encoding (US-ASCII without one).
+    assert_includes result.out.dup.force_encoding(Encoding::UTF_8), "claude 200 · repo" # the first frame was drawn
     assert result.out.end_with?(R2UI::CLI::Live::SHOW_CURSOR), "cursor shown again"
   end
 
